@@ -2,4 +2,4 @@ target/
 **/target/
 .DS_Store
 Cargo 2.toml
-rankops-python/Cargo.lock
+rankops-python/Cargo.lock.fastembed_cache/

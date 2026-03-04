@@ -57,10 +57,10 @@ fn main() {
     // ── FusionMethod enum (runtime dispatch) ────────────────────────────
     // Useful when the fusion algorithm is selected at runtime (e.g. from config).
     let methods = [
-        ("RRF",     FusionMethod::rrf()),
+        ("RRF", FusionMethod::rrf()),
         ("CombMNZ", FusionMethod::CombMnz),
-        ("Borda",   FusionMethod::Borda),
-        ("DBSF",    FusionMethod::Dbsf),
+        ("Borda", FusionMethod::Borda),
+        ("DBSF", FusionMethod::Dbsf),
     ];
     println!("\nFusionMethod dispatch — top result per method:");
     for (name, method) in &methods {

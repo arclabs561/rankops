@@ -47,10 +47,10 @@ fn main() {
     // ── MMR with raw embeddings ─────────────────────────────────────────
     // When you have embeddings instead of a precomputed matrix.
     let embeddings: Vec<Vec<f32>> = vec![
-        vec![0.9, 0.1, 0.0, 0.0], // python_async_await
+        vec![0.9, 0.1, 0.0, 0.0],   // python_async_await
         vec![0.88, 0.12, 0.0, 0.0], // python_asyncio_guide (similar)
-        vec![0.1, 0.0, 0.9, 0.1], // rust_async_await
-        vec![0.0, 0.1, 0.1, 0.9], // javascript_promises
+        vec![0.1, 0.0, 0.9, 0.1],   // rust_async_await
+        vec![0.0, 0.1, 0.1, 0.9],   // javascript_promises
         vec![0.85, 0.15, 0.0, 0.0], // python_coroutines (similar)
     ];
 

@@ -18,10 +18,10 @@ fn main() {
         (
             "doc_rust_intro",
             vec![
-                vec![0.9, 0.0, 0.0, 0.0], // "what"  — strong match
-                vec![0.0, 0.8, 0.0, 0.0], // "is"    — strong match
+                vec![0.9, 0.0, 0.0, 0.0],  // "what"  — strong match
+                vec![0.0, 0.8, 0.0, 0.0],  // "is"    — strong match
                 vec![0.0, 0.0, 0.95, 0.0], // "rust"  — strong match
-                vec![0.0, 0.0, 0.1, 0.9], // "lang"  — no query match
+                vec![0.0, 0.0, 0.1, 0.9],  // "lang"  — no query match
             ],
         ),
         (
