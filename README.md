@@ -1,5 +1,9 @@
 # rankops
 
+[![crates.io](https://img.shields.io/crates/v/rankops.svg)](https://crates.io/crates/rankops)
+[![Documentation](https://docs.rs/rankops/badge.svg)](https://docs.rs/rankops)
+[![CI](https://github.com/arclabs561/rankops/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/rankops/actions/workflows/ci.yml)
+
 Operations on ranked lists: fuse multiple retrievers, then rerank. Pairs with [**rankfns**](https://crates.io/crates/rankfns) (scoring kernels).
 
 `rankops` covers the post-retrieval pipeline:
