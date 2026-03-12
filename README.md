@@ -16,7 +16,7 @@ Operations on ranked lists: fuse multiple retrievers, then rerank. Pairs with [*
 
 ```toml
 [dependencies]
-rankops = "0.1.0"
+rankops = "0.1.3"
 ```
 
 ### Fusion
