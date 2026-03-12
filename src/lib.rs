@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Operations on ranked lists: fuse multiple retrievers, then rerank.
 //!
 //! Pairs with **rankfns** (scoring kernels). Combine results from multiple retrievers
