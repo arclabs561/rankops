@@ -74,6 +74,7 @@ impl Default for MsdConfig {
 }
 
 impl MsdConfig {
+    /// Create a new MSD config with the given result count.
     #[must_use]
     pub const fn new(k: usize) -> Self {
         Self { k }
@@ -103,6 +104,7 @@ impl Default for SsdConfig {
 }
 
 impl SsdConfig {
+    /// Create a new SSD config with result count, diversity weight, and sliding window size.
     #[must_use]
     pub fn new(k: usize, lambda: f32, window_size: usize) -> Self {
         Self {

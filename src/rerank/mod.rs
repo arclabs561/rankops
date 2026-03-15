@@ -17,6 +17,7 @@
 
 pub mod colbert;
 pub mod diversity;
+/// Extended diversity reranking (MSD, SSD algorithms).
 pub mod diversity_extended;
 pub mod embedding;
 pub mod explain;
@@ -39,13 +40,29 @@ pub use scoring::{Scorer, TokenScorer};
 #[derive(Debug, Clone, PartialEq)]
 pub enum RerankError {
     /// `head_dims` must be less than `query.len()` for tail refinement.
-    InvalidHeadDims { head_dims: usize, query_len: usize },
+    InvalidHeadDims {
+        /// Requested head dimensions.
+        head_dims: usize,
+        /// Actual query vector length.
+        query_len: usize,
+    },
     /// Vector dimensions must match.
-    DimensionMismatch { expected: usize, got: usize },
+    DimensionMismatch {
+        /// Expected dimension.
+        expected: usize,
+        /// Actual dimension received.
+        got: usize,
+    },
     /// Pool factor must be >= 1.
-    InvalidPoolFactor { pool_factor: usize },
+    InvalidPoolFactor {
+        /// Invalid pool factor value.
+        pool_factor: usize,
+    },
     /// Window size must be >= 1.
-    InvalidWindowSize { window_size: usize },
+    InvalidWindowSize {
+        /// Invalid window size value.
+        window_size: usize,
+    },
 }
 
 impl std::fmt::Display for RerankError {
