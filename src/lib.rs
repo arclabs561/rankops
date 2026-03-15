@@ -2417,6 +2417,7 @@ pub struct ConsensusReport<K> {
     pub rank_disagreement: Vec<(K, Vec<(String, usize)>)>,
 }
 
+/// Analyze consensus across fused results, identifying high-agreement and single-source items.
 pub fn analyze_consensus<K: Clone + Eq + Hash>(results: &[FusedResult<K>]) -> ConsensusReport<K> {
     let mut high_consensus = Vec::new();
     let mut single_source = Vec::new();
@@ -2781,13 +2782,21 @@ fn build_explained_results<I: Clone + Eq + Hash>(
 #[derive(Debug, Clone)]
 pub enum FusionStrategy {
     /// RRF with custom k.
-    Rrf { k: u32 },
+    Rrf {
+        /// Smoothing constant (typically 60).
+        k: u32,
+    },
     /// CombSUM.
     CombSum,
     /// CombMNZ.
     CombMnz,
     /// Weighted fusion with custom weights.
-    Weighted { weights: Vec<f32>, normalize: bool },
+    Weighted {
+        /// Per-source fusion weights.
+        weights: Vec<f32>,
+        /// Whether to normalize scores before weighting.
+        normalize: bool,
+    },
 }
 
 impl FusionStrategy {
@@ -3694,11 +3703,17 @@ pub struct OptimizeConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptimizeMetric {
     /// NDCG@k (default k=10).
-    Ndcg { k: usize },
+    Ndcg {
+        /// Cutoff depth for NDCG evaluation.
+        k: usize,
+    },
     /// Mean Reciprocal Rank.
     Mrr,
     /// Recall@k (default k=10).
-    Recall { k: usize },
+    Recall {
+        /// Cutoff depth for recall evaluation.
+        k: usize,
+    },
 }
 
 impl Default for OptimizeMetric {
@@ -3711,9 +3726,15 @@ impl Default for OptimizeMetric {
 #[derive(Debug, Clone)]
 pub enum ParamGrid {
     /// Grid search over RRF k values.
-    RrfK { values: Vec<u32> },
+    RrfK {
+        /// k values to search over.
+        values: Vec<u32>,
+    },
     /// Grid search over weighted fusion weights.
-    Weighted { weight_combinations: Vec<Vec<f32>> },
+    Weighted {
+        /// Weight vectors to evaluate.
+        weight_combinations: Vec<Vec<f32>>,
+    },
 }
 
 /// Optimized parameters from hyperparameter search.
