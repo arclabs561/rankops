@@ -265,12 +265,18 @@ pub fn quantize_batch(
 pub enum QuantizedBatch {
     /// INT8 quantized batch with per-vector scales and zero points.
     Int8 {
+        /// Quantized values (i16 for accumulation headroom).
         quantized: Vec<Vec<i16>>,
+        /// Per-vector scale factors.
         scales: Vec<f32>,
+        /// Per-vector zero points.
         zero_points: Vec<i8>,
     },
     /// FP16 quantized batch.
-    Fp16 { quantized: Vec<Vec<u16>> },
+    Fp16 {
+        /// Half-precision quantized values (stored as u16 bit patterns).
+        quantized: Vec<Vec<u16>>,
+    },
 }
 
 /// Quantization errors.
