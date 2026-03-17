@@ -58,8 +58,9 @@ pub mod adapt;
 pub mod diagnostics;
 /// Composable fusion pipeline and multi-query fusion.
 pub mod pipeline;
-/// Validation utilities for fusion results.
+/// Reranking: MaxSim/ColBERT, MMR/DPP diversity, Matryoshka, scoring, quantization.
 pub mod rerank;
+/// Validation utilities for fusion results.
 pub mod validate;
 
 #[cfg(test)]
@@ -595,8 +596,18 @@ impl FusionMethod {
         L: AsRef<[(I, f32)]>,
     {
         match self {
-            Self::Rrf { k } => crate::rrf_multi(lists, RrfConfig::new(*k)),
-            Self::Isr { k } => crate::isr_multi(lists, RrfConfig::new(*k)),
+            Self::Rrf { k } => {
+                if *k == 0 {
+                    return Vec::new();
+                }
+                crate::rrf_multi(lists, RrfConfig::new(*k))
+            }
+            Self::Isr { k } => {
+                if *k == 0 {
+                    return Vec::new();
+                }
+                crate::isr_multi(lists, RrfConfig::new(*k))
+            }
             Self::CombSum => crate::combsum_multi(lists, FusionConfig::default()),
             Self::CombMnz => crate::combmnz_multi(lists, FusionConfig::default()),
             Self::Borda => crate::borda_multi(lists, FusionConfig::default()),
@@ -621,8 +632,8 @@ impl FusionMethod {
                 }
             }
             Self::Dbsf => crate::dbsf_multi(lists, FusionConfig::default()),
-            Self::Standardized { clip_range: _ } => {
-                crate::standardized_multi(lists, StandardizedConfig::default())
+            Self::Standardized { clip_range } => {
+                crate::standardized_multi(lists, StandardizedConfig::new(*clip_range))
             }
             Self::AdditiveMultiTask {
                 weight_a,
