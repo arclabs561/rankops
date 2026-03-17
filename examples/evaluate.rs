@@ -243,7 +243,6 @@ fn main() {
     // Optimize RRF k parameter
     let runs = vec![bm25.clone(), dense.clone()];
     let rrf_config = OptimizeConfig {
-        method: FusionMethod::rrf(),
         metric: OptimizeMetric::Ndcg { k: 10 },
         param_grid: ParamGrid::RrfK {
             values: vec![1, 5, 10, 20, 40, 60, 80, 100],
@@ -264,7 +263,6 @@ fn main() {
         .collect();
 
     let weighted_config = OptimizeConfig {
-        method: FusionMethod::weighted(0.5, 0.5),
         metric: OptimizeMetric::Ndcg { k: 10 },
         param_grid: ParamGrid::Weighted {
             weight_combinations: alphas,
@@ -278,7 +276,6 @@ fn main() {
 
     // Optimize for MAP (MTEB Reranking metric)
     let map_config = OptimizeConfig {
-        method: FusionMethod::rrf(),
         metric: OptimizeMetric::MapAtK { k: 10 },
         param_grid: ParamGrid::RrfK {
             values: vec![10, 20, 40, 60, 100],
