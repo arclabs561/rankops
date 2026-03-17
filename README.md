@@ -132,6 +132,25 @@ The `diagnostics` module helps decide whether fusion is beneficial:
 
 Based on Louis et al., "Know When to Fuse" (2024): high complementarity (>0.5) predicts fusion benefit; low correlation between rankers predicts fusion benefit.
 
+## Pipeline
+
+The `pipeline` module provides composable post-retrieval operations:
+
+```rust
+use rankops::pipeline::Pipeline;
+use rankops::{FusionMethod, Normalization};
+
+let result = Pipeline::new()
+    .add_run("bm25", &bm25)
+    .add_run("dense", &dense)
+    .normalize(Normalization::MinMax)
+    .fuse(FusionMethod::rrf())
+    .top_k(10)
+    .execute();
+```
+
+Also: `compare()` for method comparison, `fuse_multi_query()` for the N-queries x M-retrievers RAG pattern.
+
 ## Reranking (feature: `rerank`)
 
 | Module | Description |
@@ -163,6 +182,8 @@ cargo run --example evaluate                      # Metrics, diagnostics, method
 
 - [**rankfns**](https://crates.io/crates/rankfns) -- scoring kernels (BM25, TF-IDF, cosine) that pair with `rankops`
 - [**innr**](https://crates.io/crates/innr) -- SIMD dot product and MaxSim primitives used by the `rerank` feature
+- [**vicinity**](https://crates.io/crates/vicinity) -- ANN vector search (HNSW, IVF-PQ) that feeds ranked candidates to `rankops`
+- [**rankit**](https://crates.io/crates/rankit) -- learning-to-rank training (LTR losses, differentiable sorting, evaluation)
 
 ## License
 
