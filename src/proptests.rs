@@ -152,6 +152,9 @@ mod tests {
                 borda(&a, &b),
                 isr(&a, &b),
                 dbsf(&a, &b),
+                condorcet(&a, &b),
+                copeland(&a, &b),
+                median_rank(&a, &b),
             ] {
                 for window in result.windows(2) {
                     prop_assert!(
@@ -171,6 +174,9 @@ mod tests {
                 borda(&a, &b),
                 isr(&a, &b),
                 dbsf(&a, &b),
+                condorcet(&a, &b),
+                copeland(&a, &b),
+                median_rank(&a, &b),
             ] {
                 let mut seen = std::collections::HashSet::new();
                 for (id, _) in &result {
@@ -192,6 +198,38 @@ mod tests {
                 let score_ba = ba_map.get(id).expect("same keys");
                 prop_assert!((score_ab - score_ba).abs() < 1e-5,
                     "Standardized not commutative for id {:?}: {} vs {}", id, score_ab, score_ba);
+            }
+        }
+
+        #[test]
+        fn copeland_commutative(a in arb_results(15), b in arb_results(15)) {
+            let ab = copeland(&a, &b);
+            let ba = copeland(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-6,
+                    "Copeland not commutative for id {:?}: {} vs {}", id, score_ab, score_ba);
+            }
+        }
+
+        #[test]
+        fn median_rank_commutative(a in arb_results(15), b in arb_results(15)) {
+            let ab = median_rank(&a, &b);
+            let ba = median_rank(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-6,
+                    "MedianRank not commutative for id {:?}: {} vs {}", id, score_ab, score_ba);
             }
         }
 

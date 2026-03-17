@@ -2,7 +2,9 @@
 //!
 //! Run: `cargo run --example fusion`
 
-use rankops::{borda, combmnz, rrf, rrf_with_config, FusionMethod, RrfConfig};
+use rankops::{
+    borda, combmnz, copeland, median_rank, rrf, rrf_with_config, FusionMethod, RrfConfig,
+};
 
 fn main() {
     // Two ranked lists from different retrievers.
@@ -54,6 +56,22 @@ fn main() {
         println!("  {id:8} {score:.6}");
     }
 
+    // ── Copeland (net pairwise wins) ────────────────────────────────────
+    // More discriminative than Condorcet: score = wins - losses.
+    let fused_copeland = copeland(&bm25, &dense);
+    println!("\nCopeland:");
+    for (id, score) in &fused_copeland {
+        println!("  {id:8} {score:.1}");
+    }
+
+    // ── Median Rank (outlier-robust) ──────────────────────────────────
+    // Takes the median rank across lists. Robust to a single bad retriever.
+    let fused_median = median_rank(&bm25, &dense);
+    println!("\nMedian Rank:");
+    for (id, score) in &fused_median {
+        println!("  {id:8} {score:.6}");
+    }
+
     // ── FusionMethod enum (runtime dispatch) ────────────────────────────
     // Useful when the fusion algorithm is selected at runtime (e.g. from config).
     let methods = [
@@ -61,6 +79,8 @@ fn main() {
         ("CombMNZ", FusionMethod::CombMnz),
         ("Borda", FusionMethod::Borda),
         ("DBSF", FusionMethod::Dbsf),
+        ("Copeland", FusionMethod::Copeland),
+        ("MedRank", FusionMethod::MedianRank),
     ];
     println!("\nFusionMethod dispatch — top result per method:");
     for (name, method) in &methods {
