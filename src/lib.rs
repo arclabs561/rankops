@@ -3688,6 +3688,107 @@ pub fn recall_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>,
     relevant_in_top_k as f32 / total_relevant as f32
 }
 
+/// Precision at k.
+///
+/// Fraction of top-k results that are relevant.
+///
+/// Formula: Precision@k = |relevant_docs_in_top_k| / k
+pub fn precision_at_k<K: Clone + Eq + Hash>(
+    results: &[(K, f32)],
+    qrels: &Qrels<K>,
+    k: usize,
+) -> f32 {
+    if k == 0 || results.is_empty() {
+        return 0.0;
+    }
+
+    let k = k.min(results.len());
+    let relevant_in_top_k = results
+        .iter()
+        .take(k)
+        .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
+        .count();
+
+    relevant_in_top_k as f32 / k as f32
+}
+
+/// Mean Average Precision (MAP).
+///
+/// Average of precision values at each rank where a relevant document appears.
+/// MAP is the default metric for MTEB Reranking and TREC evaluations.
+///
+/// Formula: MAP = (1/|R|) * Σ Precision@k * rel(k)
+///
+/// where R is the set of relevant documents and rel(k) is 1 if the document
+/// at rank k is relevant.
+pub fn map<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>) -> f32 {
+    let total_relevant = qrels.values().filter(|&&rel| rel > 0).count();
+    if total_relevant == 0 || results.is_empty() {
+        return 0.0;
+    }
+
+    let mut sum_precision = 0.0;
+    let mut relevant_seen = 0;
+
+    for (i, (id, _)) in results.iter().enumerate() {
+        if qrels.get(id).is_some_and(|&rel| rel > 0) {
+            relevant_seen += 1;
+            // Precision at this rank position
+            sum_precision += relevant_seen as f32 / (i + 1) as f32;
+        }
+    }
+
+    sum_precision / total_relevant as f32
+}
+
+/// Mean Average Precision at k (MAP@k).
+///
+/// Like [`map`] but only considers the top-k results.
+/// Used by MTEB Reranking (MAP@10) and TREC evaluations.
+pub fn map_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k: usize) -> f32 {
+    let total_relevant = qrels.values().filter(|&&rel| rel > 0).count();
+    if total_relevant == 0 || results.is_empty() || k == 0 {
+        return 0.0;
+    }
+
+    let k = k.min(results.len());
+    let mut sum_precision = 0.0;
+    let mut relevant_seen = 0;
+
+    for (i, (id, _)) in results.iter().take(k).enumerate() {
+        if qrels.get(id).is_some_and(|&rel| rel > 0) {
+            relevant_seen += 1;
+            sum_precision += relevant_seen as f32 / (i + 1) as f32;
+        }
+    }
+
+    // Divide by min(total_relevant, k) for MAP@k — standard IR convention
+    // when k < total_relevant, we can only observe k documents
+    sum_precision / total_relevant.min(k) as f32
+}
+
+/// Hit Rate (Success@k).
+///
+/// Binary: 1.0 if any relevant document appears in top-k, 0.0 otherwise.
+/// Commonly reported in RAG evaluation pipelines.
+pub fn hit_rate<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k: usize) -> f32 {
+    if k == 0 || results.is_empty() {
+        return 0.0;
+    }
+
+    let k = k.min(results.len());
+    let hit = results
+        .iter()
+        .take(k)
+        .any(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0));
+
+    if hit {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 /// Optimization configuration for hyperparameter search.
 #[derive(Debug, Clone)]
 pub struct OptimizeConfig {
@@ -3712,6 +3813,23 @@ pub enum OptimizeMetric {
     /// Recall@k (default k=10).
     Recall {
         /// Cutoff depth for recall evaluation.
+        k: usize,
+    },
+    /// Precision@k.
+    Precision {
+        /// Cutoff depth for precision evaluation.
+        k: usize,
+    },
+    /// Mean Average Precision (full ranking).
+    Map,
+    /// MAP@k (truncated at k).
+    MapAtK {
+        /// Cutoff depth for MAP evaluation.
+        k: usize,
+    },
+    /// Hit Rate / Success@k.
+    HitRate {
+        /// Cutoff depth.
         k: usize,
     },
 }
@@ -3744,6 +3862,25 @@ pub struct OptimizedParams {
     pub best_score: f32,
     /// Parameters that achieved best score.
     pub best_params: String,
+}
+
+/// Evaluate a ranked list using the specified metric.
+///
+/// Convenience function that dispatches to the appropriate metric function.
+pub fn evaluate_metric<K: Clone + Eq + Hash>(
+    results: &[(K, f32)],
+    qrels: &Qrels<K>,
+    metric: OptimizeMetric,
+) -> f32 {
+    match metric {
+        OptimizeMetric::Ndcg { k } => ndcg_at_k(results, qrels, k),
+        OptimizeMetric::Mrr => mrr(results, qrels),
+        OptimizeMetric::Recall { k } => recall_at_k(results, qrels, k),
+        OptimizeMetric::Precision { k } => precision_at_k(results, qrels, k),
+        OptimizeMetric::Map => map(results, qrels),
+        OptimizeMetric::MapAtK { k } => map_at_k(results, qrels, k),
+        OptimizeMetric::HitRate { k } => hit_rate(results, qrels, k),
+    }
 }
 
 /// Optimize fusion hyperparameters using grid search.
@@ -3792,11 +3929,7 @@ pub fn optimize_fusion<K: Clone + Eq + Hash>(
                 let method = FusionMethod::Rrf { k };
                 let fused = method.fuse_multi(runs);
 
-                let score = match config.metric {
-                    OptimizeMetric::Ndcg { k: ndcg_k } => ndcg_at_k(&fused, qrels, ndcg_k),
-                    OptimizeMetric::Mrr => mrr(&fused, qrels),
-                    OptimizeMetric::Recall { k: recall_k } => recall_at_k(&fused, qrels, recall_k),
-                };
+                let score = evaluate_metric(&fused, qrels, config.metric);
 
                 if score > best_score {
                     best_score = score;
@@ -3818,13 +3951,7 @@ pub fn optimize_fusion<K: Clone + Eq + Hash>(
                     .collect();
 
                 if let Ok(fused) = weighted_multi(&lists, true, None) {
-                    let score = match config.metric {
-                        OptimizeMetric::Ndcg { k: ndcg_k } => ndcg_at_k(&fused, qrels, ndcg_k),
-                        OptimizeMetric::Mrr => mrr(&fused, qrels),
-                        OptimizeMetric::Recall { k: recall_k } => {
-                            recall_at_k(&fused, qrels, recall_k)
-                        }
-                    };
+                    let score = evaluate_metric(&fused, qrels, config.metric);
 
                     if score > best_score {
                         best_score = score;
@@ -3844,8 +3971,8 @@ pub fn optimize_fusion<K: Clone + Eq + Hash>(
 /// Optimization module exports.
 pub mod optimize {
     pub use crate::{
-        mrr, ndcg_at_k, optimize_fusion, recall_at_k, OptimizeConfig, OptimizeMetric,
-        OptimizedParams, ParamGrid, Qrels,
+        evaluate_metric, hit_rate, map, map_at_k, mrr, ndcg_at_k, optimize_fusion, precision_at_k,
+        recall_at_k, OptimizeConfig, OptimizeMetric, OptimizedParams, ParamGrid, Qrels,
     };
 }
 
@@ -4760,6 +4887,142 @@ mod tests {
 
         // Different lengths
         assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+    }
+
+    // ── Evaluation Metric Tests ──────────────────────────────────────────────
+
+    fn make_qrels() -> Qrels<&'static str> {
+        // d1=highly relevant, d2=relevant, d3=relevant, d4/d5=not relevant
+        HashMap::from([("d1", 2), ("d2", 1), ("d3", 1)])
+    }
+
+    #[test]
+    fn precision_at_k_basic() {
+        let qrels = make_qrels();
+        // Results: d1(rel=2), d4(not rel), d2(rel=1), d5(not rel), d3(rel=1)
+        let results = vec![
+            ("d1", 0.9),
+            ("d4", 0.8),
+            ("d2", 0.7),
+            ("d5", 0.6),
+            ("d3", 0.5),
+        ];
+
+        // P@1 = 1/1 = 1.0 (d1 is relevant)
+        assert!((precision_at_k(&results, &qrels, 1) - 1.0).abs() < 1e-6);
+        // P@2 = 1/2 = 0.5 (d1 relevant, d4 not)
+        assert!((precision_at_k(&results, &qrels, 2) - 0.5).abs() < 1e-6);
+        // P@3 = 2/3 (d1, d2 relevant out of 3)
+        assert!((precision_at_k(&results, &qrels, 3) - 2.0 / 3.0).abs() < 1e-6);
+        // P@5 = 3/5 = 0.6
+        assert!((precision_at_k(&results, &qrels, 5) - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn precision_at_k_edge_cases() {
+        let qrels = make_qrels();
+        let results = vec![("d1", 0.9)];
+
+        assert_eq!(precision_at_k(&results, &qrels, 0), 0.0);
+        assert_eq!(precision_at_k(&[], &qrels, 5), 0.0);
+        // k > results.len() clamps
+        assert!((precision_at_k(&results, &qrels, 10) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn map_basic() {
+        let qrels = make_qrels(); // d1=2, d2=1, d3=1 (3 relevant)
+                                  // Perfect ranking: all relevant docs first
+        let perfect = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7), ("d4", 0.6)];
+        // MAP = (1/3) * (1/1 + 2/2 + 3/3) = (1/3) * 3 = 1.0
+        assert!((map(&perfect, &qrels) - 1.0).abs() < 1e-6);
+
+        // Interleaved: d1, d4, d2, d5, d3
+        let interleaved = vec![
+            ("d1", 0.9),
+            ("d4", 0.8),
+            ("d2", 0.7),
+            ("d5", 0.6),
+            ("d3", 0.5),
+        ];
+        // P@1=1/1=1.0 (d1 relevant), P@3=2/3 (d2 relevant), P@5=3/5 (d3 relevant)
+        // MAP = (1/3) * (1.0 + 2/3 + 3/5) = (1/3) * (1.0 + 0.6667 + 0.6) = 0.7556
+        let expected = (1.0 + 2.0 / 3.0 + 3.0 / 5.0) / 3.0;
+        assert!((map(&interleaved, &qrels) - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn map_at_k_truncation() {
+        let qrels = make_qrels(); // 3 relevant
+        let results = vec![
+            ("d4", 0.9), // not relevant
+            ("d1", 0.8), // relevant
+            ("d5", 0.7), // not relevant
+            ("d2", 0.6), // relevant (beyond k=3)
+        ];
+
+        // MAP@3: only consider first 3 results
+        // Relevant at position 2: P@2 = 1/2
+        // MAP@3 = (1/2) / min(3, 3) = 0.5/3 = 0.1667
+        let expected = (1.0 / 2.0) / 3.0;
+        assert!(
+            (map_at_k(&results, &qrels, 3) - expected).abs() < 1e-4,
+            "MAP@3 = {}, expected {}",
+            map_at_k(&results, &qrels, 3),
+            expected
+        );
+    }
+
+    #[test]
+    fn map_empty() {
+        let qrels = make_qrels();
+        assert_eq!(map(&[], &qrels), 0.0);
+        assert_eq!(map_at_k(&[], &qrels, 10), 0.0);
+
+        let empty_qrels: Qrels<&str> = HashMap::new();
+        let results = vec![("d1", 0.9)];
+        assert_eq!(map(&results, &empty_qrels), 0.0);
+    }
+
+    #[test]
+    fn hit_rate_basic() {
+        let qrels = make_qrels();
+        // First result is relevant
+        let results = vec![("d1", 0.9), ("d4", 0.8)];
+        assert_eq!(hit_rate(&results, &qrels, 1), 1.0);
+        assert_eq!(hit_rate(&results, &qrels, 2), 1.0);
+
+        // First result is NOT relevant
+        let results2 = vec![("d4", 0.9), ("d5", 0.8), ("d1", 0.7)];
+        assert_eq!(hit_rate(&results2, &qrels, 1), 0.0);
+        assert_eq!(hit_rate(&results2, &qrels, 2), 0.0);
+        assert_eq!(hit_rate(&results2, &qrels, 3), 1.0);
+    }
+
+    #[test]
+    fn hit_rate_edge_cases() {
+        let qrels = make_qrels();
+        assert_eq!(hit_rate(&[], &qrels, 5), 0.0);
+        assert_eq!(hit_rate(&[("d4", 0.9)], &qrels, 1), 0.0); // d4 not relevant
+    }
+
+    #[test]
+    fn evaluate_metric_dispatch() {
+        let qrels = make_qrels();
+        let results = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7)];
+
+        // Verify dispatch matches direct calls
+        let ndcg = evaluate_metric(&results, &qrels, OptimizeMetric::Ndcg { k: 3 });
+        assert!((ndcg - ndcg_at_k(&results, &qrels, 3)).abs() < 1e-6);
+
+        let m = evaluate_metric(&results, &qrels, OptimizeMetric::Map);
+        assert!((m - map(&results, &qrels)).abs() < 1e-6);
+
+        let p = evaluate_metric(&results, &qrels, OptimizeMetric::Precision { k: 2 });
+        assert!((p - precision_at_k(&results, &qrels, 2)).abs() < 1e-6);
+
+        let h = evaluate_metric(&results, &qrels, OptimizeMetric::HitRate { k: 1 });
+        assert!((h - hit_rate(&results, &qrels, 1)).abs() < 1e-6);
     }
 }
 
