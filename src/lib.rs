@@ -54,6 +54,8 @@ use std::hash::Hash;
 
 /// Fusion diagnostics: complementarity, overlap, score distributions.
 pub mod diagnostics;
+/// Composable fusion pipeline and multi-query fusion.
+pub mod pipeline;
 /// Validation utilities for fusion results.
 pub mod rerank;
 pub mod validate;
