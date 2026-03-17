@@ -11,7 +11,7 @@
 //!
 //! Run: `cargo run --example evaluate`
 
-use rankops::diagnostics::{diagnose, score_stats};
+use rankops::diagnostics::{diagnose, diagnose_multi, score_stats};
 use rankops::{
     borda, combmnz, combsum, condorcet, copeland, dbsf, hit_rate, map, map_at_k, median_rank, mrr,
     ndcg_at_k, normalize_scores, optimize_fusion, precision_at_k, recall_at_k, rrf, weighted,
@@ -112,6 +112,19 @@ fn main() {
         );
         println!("    suggestion: {:?}", diag.suggestion);
     }
+
+    // Multi-retriever diagnostics (all 3 at once)
+    let multi_diag = diagnose_multi(
+        &[
+            ("BM25", bm25.as_slice()),
+            ("Dense", dense.as_slice()),
+            ("Sparse", sparse.as_slice()),
+        ],
+        Some(&qrels),
+    );
+    println!("\nMulti-retriever diagnostics:");
+    println!("  full overlap (all 3): {:.2}", multi_diag.full_overlap);
+    println!("  suggestion: {:?}", multi_diag.suggestion);
 
     // ── Fusion method comparison ──────────────────────────────────────────
     println!("\n=== Fusion Method Comparison (BM25 + Dense) ===\n");
@@ -313,4 +326,46 @@ fn main() {
         best_3way.0,
         ndcg_at_k(&best_3way.1, &qrels, 10)
     );
+
+    // ── Pipeline API ──────────────────────────────────────────────────────
+    println!("\n=== Pipeline API ===\n");
+
+    use rankops::pipeline::{compare, Pipeline};
+
+    let pipeline_result = Pipeline::new()
+        .add_run("bm25", &bm25)
+        .add_run("dense", &dense)
+        .add_run("sparse", &sparse)
+        .normalize(Normalization::MinMax)
+        .fuse(FusionMethod::Copeland)
+        .top_k(10)
+        .execute_and_evaluate(&qrels);
+
+    println!("Pipeline (3-way, MinMax, Copeland, top-10):");
+    println!("  {}", pipeline_result.metrics);
+
+    // Compare all methods at once
+    let b_ref = bm25.as_slice();
+    let d_ref = dense.as_slice();
+    let s_ref = sparse.as_slice();
+    let all_runs: Vec<&[(&str, f32)]> = vec![b_ref, d_ref, s_ref];
+
+    let configs = vec![
+        ("RRF", FusionMethod::rrf()),
+        ("CombSUM", FusionMethod::CombSum),
+        ("CombMNZ", FusionMethod::CombMnz),
+        ("CombMAX", FusionMethod::CombMax),
+        ("Copeland", FusionMethod::Copeland),
+        ("MedianRank", FusionMethod::MedianRank),
+        ("DBSF", FusionMethod::Dbsf),
+    ];
+
+    let comparison = compare(&all_runs, &qrels, &configs, OptimizeMetric::Ndcg { k: 10 });
+    println!("\nMethod comparison (sorted by NDCG@10):");
+    for (name, m) in &comparison {
+        println!(
+            "  {:12} NDCG@10={:.4}  MAP={:.4}  MRR={:.4}",
+            name, m.ndcg_10, m.map, m.mrr
+        );
+    }
 }
