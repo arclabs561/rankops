@@ -52,6 +52,8 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+/// Adapters for converting retriever outputs (distances, similarities, logits).
+pub mod adapt;
 /// Fusion diagnostics: complementarity, overlap, score distributions.
 pub mod diagnostics;
 /// Composable fusion pipeline and multi-query fusion.
