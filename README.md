@@ -10,7 +10,8 @@ Operations on ranked lists: fuse multiple retrievers, then rerank. Pairs with [*
 
 - **Fusion** -- combine ranked lists from heterogeneous retrievers (BM25, dense, sparse)
 - **Reranking** -- MaxSim/ColBERT late interaction, MMR/DPP diversity, Matryoshka two-stage
-- **Evaluation** -- NDCG, MRR, recall@k, fusion parameter optimization
+- **Evaluation** -- NDCG, MAP, MRR, Precision@k, recall@k, Hit Rate, fusion parameter optimization
+- **Diagnostics** -- complementarity analysis, score distribution stats, fusion recommendations
 
 ## Quickstart
 
@@ -77,16 +78,59 @@ let selected = mmr(&candidates, &similarity, config);
 | `isr` | No | Inverse Square Root fusion -- gentler rank decay than RRF |
 | `borda` | No | Borda count -- (N - rank) voting points |
 | `condorcet` | No | Pairwise Condorcet voting -- outlier-robust |
+| `copeland` | No | Copeland voting -- net pairwise wins, more discriminative than Condorcet |
+| `median_rank` | No | Median rank across lists -- outlier-robust aggregation |
 | `combsum` | Yes | Sum of min-max normalized scores |
 | `combmnz` | Yes | CombSUM * overlap count -- rewards multi-list presence |
 | `combmax` | Yes | Max score across lists |
 | `combmin` | Yes | Min score -- conservative, requires all retrievers to agree |
 | `combmed` | Yes | Median score -- robust to outliers |
+| `combanz` | Yes | Average of non-zero scores |
 | `weighted` | Yes | Weighted combination with per-list weights |
 | `dbsf` | Yes | Distribution-Based Score Fusion (z-score normalization) |
 | `standardized` | Yes | ERANK-style z-score fusion with clipping |
 
 All two-list functions have `*_multi` variants for 3+ lists. Explainability variants (`rrf_explain`, `combsum_explain`, etc.) return full provenance.
+
+### Normalization
+
+Score normalization for cross-retriever fusion via `Normalization` enum:
+
+| Variant | Range | Notes |
+|---------|-------|-------|
+| `MinMax` | [0, 1] | Default. Sensitive to outliers |
+| `ZScore` | ~[-3, 3] | Robust to different distributions |
+| `Quantile` | [0, 1] | Percentile ranks. Most robust to non-Gaussian scores |
+| `Sigmoid` | (0, 1) | Logistic squash. Handles unbounded scores (cross-encoder logits) |
+| `Sum` | [0, 1] | Relative magnitudes. For probability-like scores |
+| `Rank` | [0, 1] | Ignores magnitudes entirely |
+
+## Evaluation
+
+| Function | Description |
+|----------|-------------|
+| `ndcg_at_k` | Normalized Discounted Cumulative Gain (BEIR default) |
+| `map` / `map_at_k` | Mean Average Precision (MTEB Reranking default) |
+| `mrr` | Mean Reciprocal Rank |
+| `precision_at_k` | Fraction of top-k that are relevant |
+| `recall_at_k` | Fraction of relevant docs in top-k |
+| `hit_rate` | Binary: any relevant doc in top-k? |
+| `evaluate_metric` | Dispatch by `OptimizeMetric` enum |
+| `optimize_fusion` | Grid search over fusion parameters |
+
+## Diagnostics
+
+The `diagnostics` module helps decide whether fusion is beneficial:
+
+| Function | Description |
+|----------|-------------|
+| `score_stats` | Distribution analysis (mean, std, median, percentiles) |
+| `overlap_ratio` | Jaccard overlap between document sets |
+| `complementarity` | Fraction of relevant docs unique to one retriever |
+| `rank_correlation` | Kendall's tau-b on shared documents |
+| `diagnose` | Full report with fusion recommendation |
+
+Based on Louis et al., "Know When to Fuse" (2024): high complementarity (>0.5) predicts fusion benefit; low correlation between rankers predicts fusion benefit.
 
 ## Reranking (feature: `rerank`)
 
@@ -109,9 +153,10 @@ All two-list functions have `*_multi` variants for 3+ lists. Explainability vari
 ## Examples
 
 ```sh
-cargo run --example fusion                        # RRF, CombMNZ, Borda
+cargo run --example fusion                        # RRF, CombMNZ, Borda, Copeland, MedianRank
 cargo run --example rerank_maxsim --features rerank  # ColBERT MaxSim scoring
 cargo run --example diversity --features rerank      # MMR and DPP diversity
+cargo run --example evaluate                      # Metrics, diagnostics, method comparison
 ```
 
 ## See also
