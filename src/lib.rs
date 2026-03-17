@@ -2056,6 +2056,18 @@ pub enum Normalization {
     /// to [0, 1] range where rank 0 (best) → 1.0, rank n-1 (worst) → 1/n.
     /// Ignores score magnitudes entirely. Most robust but loses information.
     Rank,
+    /// Quantile normalization: maps scores to their percentile rank in [0, 1].
+    ///
+    /// More robust than min-max for non-Gaussian score distributions.
+    /// Each score becomes `rank_among_scores / (n - 1)`.
+    /// Referenced as an alternative to 3-sigma DBSF normalization
+    /// when cosine similarity scores are not normally distributed.
+    Quantile,
+    /// Sigmoid normalization: `1 / (1 + exp(-score))` → (0, 1).
+    ///
+    /// Squashes unbounded scores to (0, 1) while preserving relative ordering.
+    /// Useful for cross-encoder logits or other unbounded score ranges.
+    Sigmoid,
     /// No normalization: use raw scores
     ///
     /// Only use when all retrievers use the same scale.
@@ -2125,6 +2137,35 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
                 .map(|(rank, (id, _))| (id.clone(), 1.0 - (rank as f32 / n)))
                 .collect()
         }
+        Normalization::Quantile => {
+            // Sort scores to assign percentile ranks
+            let mut indexed: Vec<(usize, f32)> = results
+                .iter()
+                .enumerate()
+                .map(|(i, (_, s))| (i, *s))
+                .collect();
+            indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let n = indexed.len();
+            let mut quantiles = vec![0.0f32; n];
+            if n == 1 {
+                quantiles[0] = 0.5; // Single item gets middle quantile
+            } else {
+                for (rank, &(orig_idx, _)) in indexed.iter().enumerate() {
+                    quantiles[orig_idx] = rank as f32 / (n - 1) as f32;
+                }
+            }
+
+            results
+                .iter()
+                .enumerate()
+                .map(|(i, (id, _))| (id.clone(), quantiles[i]))
+                .collect()
+        }
+        Normalization::Sigmoid => results
+            .iter()
+            .map(|(id, s)| (id.clone(), 1.0 / (1.0 + (-s).exp())))
+            .collect(),
         Normalization::None => results.to_vec(),
     }
 }
@@ -5072,6 +5113,72 @@ mod tests {
 
         // Different lengths
         assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+    }
+
+    // ── Normalization Tests ────────────────────────────────────────────────
+
+    #[test]
+    fn quantile_normalization() {
+        let results = vec![
+            ("a", 10.0),
+            ("b", 20.0),
+            ("c", 30.0),
+            ("d", 40.0),
+            ("e", 50.0),
+        ];
+        let normed = normalize_scores(&results, Normalization::Quantile);
+
+        // Sorted ascending: a(10)=0.0, b(20)=0.25, c(30)=0.5, d(40)=0.75, e(50)=1.0
+        assert!((normed[0].1 - 0.0).abs() < 1e-6, "a should be 0.0");
+        assert!((normed[1].1 - 0.25).abs() < 1e-6, "b should be 0.25");
+        assert!((normed[2].1 - 0.5).abs() < 1e-6, "c should be 0.5");
+        assert!((normed[4].1 - 1.0).abs() < 1e-6, "e should be 1.0");
+    }
+
+    #[test]
+    fn quantile_normalization_single() {
+        let results = vec![("a", 42.0)];
+        let normed = normalize_scores(&results, Normalization::Quantile);
+        assert!((normed[0].1 - 0.5).abs() < 1e-6, "single item gets 0.5");
+    }
+
+    #[test]
+    fn sigmoid_normalization() {
+        let results = vec![("a", -10.0), ("b", 0.0), ("c", 10.0)];
+        let normed = normalize_scores(&results, Normalization::Sigmoid);
+
+        // sigmoid(-10) ~ 0.0000454, sigmoid(0) = 0.5, sigmoid(10) ~ 0.99995
+        assert!(normed[0].1 < 0.01, "sigmoid(-10) should be near 0");
+        assert!((normed[1].1 - 0.5).abs() < 1e-6, "sigmoid(0) should be 0.5");
+        assert!(normed[2].1 > 0.99, "sigmoid(10) should be near 1");
+    }
+
+    #[test]
+    fn sigmoid_preserves_order() {
+        let results = vec![("a", 1.0), ("b", 3.0), ("c", 2.0)];
+        let normed = normalize_scores(&results, Normalization::Sigmoid);
+
+        // b(3.0) > c(2.0) > a(1.0) should hold after sigmoid
+        assert!(normed[1].1 > normed[2].1);
+        assert!(normed[2].1 > normed[0].1);
+    }
+
+    #[test]
+    fn quantile_handles_non_gaussian() {
+        // Scores with extreme outlier -- quantile should be robust
+        let results = vec![
+            ("a", 0.1),
+            ("b", 0.2),
+            ("c", 0.3),
+            ("d", 100.0), // extreme outlier
+        ];
+        let normed = normalize_scores(&results, Normalization::Quantile);
+
+        // Quantile normalization: ranks are 0/3, 1/3, 2/3, 3/3
+        assert!((normed[0].1 - 0.0).abs() < 1e-6);
+        assert!((normed[1].1 - 1.0 / 3.0).abs() < 1e-6);
+        assert!((normed[2].1 - 2.0 / 3.0).abs() < 1e-6);
+        assert!((normed[3].1 - 1.0).abs() < 1e-6);
     }
 
     // ── Copeland & Median Rank Tests ───────────────────────────────────────
