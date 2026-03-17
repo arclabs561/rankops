@@ -1,6 +1,6 @@
 [package]
 name = "rankops"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Operations on ranked lists: fusion (RRF, Copeland, CombMNZ, DBSF, 14 methods), reranking (MaxSim/ColBERT, MMR, DPP), evaluation (NDCG, MAP, MRR), diagnostics, pipeline builder."
