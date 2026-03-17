@@ -17,8 +17,6 @@
 
 pub mod colbert;
 pub mod diversity;
-/// Extended diversity reranking (MSD, SSD algorithms).
-pub mod diversity_extended;
 pub mod embedding;
 pub mod explain;
 pub mod matryoshka;
