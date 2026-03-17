@@ -25,6 +25,8 @@
 //! | [`weighted`] | Yes | Custom retriever weights |
 //! | [`dbsf`] | Yes | Different score distributions |
 //! | [`condorcet`] | No | Pairwise voting, outlier-robust |
+//! | [`copeland`] | No | Net pairwise wins, more discriminative than Condorcet |
+//! | [`median_rank`] | No | Median rank across lists, outlier-robust |
 //! | [`combmax`] | Yes | At least one retriever likes it |
 //! | [`combmin`] | Yes | All retrievers must agree (conservative) |
 //! | [`combmed`] | Yes | Median score, robust to outliers |
@@ -278,8 +280,12 @@ impl FusionConfig {
 pub mod prelude {
     pub use crate::{
         additive_multi_task, additive_multi_task_multi, additive_multi_task_with_config, borda,
-        combanz, combmax, combmed, combmnz, combsum, dbsf, isr, isr_with_config, rrf,
-        rrf_with_config, standardized, standardized_multi, standardized_with_config, weighted,
+        combanz, combmax, combmed, combmnz, combsum, condorcet, copeland, dbsf, isr,
+        isr_with_config, median_rank, rrf, rrf_with_config, standardized, standardized_multi,
+        standardized_with_config, weighted,
+    };
+    pub use crate::{
+        evaluate_metric, hit_rate, map, map_at_k, mrr, ndcg_at_k, precision_at_k, recall_at_k,
     };
     pub use crate::{
         AdditiveMultiTaskConfig, FusionConfig, FusionError, FusionMethod, Normalization, Result,
@@ -5310,10 +5316,13 @@ mod tests {
         let direct = copeland(&a, &b);
         let via_enum = FusionMethod::Copeland.fuse(&a, &b);
 
-        assert_eq!(direct.len(), via_enum.len());
-        for (d, e) in direct.iter().zip(via_enum.iter()) {
-            assert_eq!(d.0, e.0);
-            assert!((d.1 - e.1).abs() < 1e-6);
+        // Compare as score maps (tie-breaking order may differ)
+        let direct_map: HashMap<_, _> = direct.into_iter().collect();
+        let enum_map: HashMap<_, _> = via_enum.into_iter().collect();
+        assert_eq!(direct_map.len(), enum_map.len());
+        for (id, score) in &direct_map {
+            let other = enum_map.get(id).expect("same keys");
+            assert!((score - other).abs() < 1e-6);
         }
     }
 
@@ -5325,10 +5334,12 @@ mod tests {
         let direct = median_rank(&a, &b);
         let via_enum = FusionMethod::MedianRank.fuse(&a, &b);
 
-        assert_eq!(direct.len(), via_enum.len());
-        for (d, e) in direct.iter().zip(via_enum.iter()) {
-            assert_eq!(d.0, e.0);
-            assert!((d.1 - e.1).abs() < 1e-6);
+        let direct_map: HashMap<_, _> = direct.into_iter().collect();
+        let enum_map: HashMap<_, _> = via_enum.into_iter().collect();
+        assert_eq!(direct_map.len(), enum_map.len());
+        for (id, score) in &direct_map {
+            let other = enum_map.get(id).expect("same keys");
+            assert!((score - other).abs() < 1e-6);
         }
     }
 
