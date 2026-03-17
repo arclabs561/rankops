@@ -17,7 +17,7 @@ Operations on ranked lists: fuse multiple retrievers, then rerank. Pairs with [*
 
 ```toml
 [dependencies]
-rankops = "0.1.3"
+rankops = "0.1.4"
 ```
 
 ### Fusion
@@ -185,10 +185,11 @@ Also: `compare()` for method comparison, `fuse_multi_query()` for the N-queries 
 ## Examples
 
 ```sh
-cargo run --example fusion                        # RRF, CombMNZ, Borda, Copeland, MedianRank
-cargo run --example rerank_maxsim --features rerank  # ColBERT MaxSim scoring
-cargo run --example diversity --features rerank      # MMR and DPP diversity
-cargo run --example evaluate                      # Metrics, diagnostics, method comparison
+cargo run --example fusion            # All fusion methods side-by-side
+cargo run --example hybrid_search     # End-to-end: BM25 + dense -> fuse -> rerank -> eval
+cargo run --example evaluate          # Metrics, diagnostics, pipeline, method comparison
+cargo run --example rerank_maxsim     # ColBERT MaxSim scoring
+cargo run --example diversity         # MMR and DPP diversity reranking
 ```
 
 ## See also
