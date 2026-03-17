@@ -357,6 +357,12 @@ pub enum FusionMethod {
     CombMnz,
     /// Borda count — N - rank points.
     Borda,
+    /// Condorcet — pairwise majority wins.
+    Condorcet,
+    /// Copeland — pairwise net wins (wins - losses). More discriminative than Condorcet.
+    Copeland,
+    /// Median Rank Aggregation — median rank across lists. Outlier-robust.
+    MedianRank,
     /// Weighted combination with custom weights.
     Weighted {
         /// Weight for first list.
@@ -504,6 +510,9 @@ impl FusionMethod {
             Self::CombSum => crate::combsum(a, b),
             Self::CombMnz => crate::combmnz(a, b),
             Self::Borda => crate::borda(a, b),
+            Self::Condorcet => crate::condorcet(a, b),
+            Self::Copeland => crate::copeland(a, b),
+            Self::MedianRank => crate::median_rank(a, b),
             Self::Weighted {
                 weight_a,
                 weight_b,
@@ -549,6 +558,9 @@ impl FusionMethod {
             Self::CombSum => crate::combsum_multi(lists, FusionConfig::default()),
             Self::CombMnz => crate::combmnz_multi(lists, FusionConfig::default()),
             Self::Borda => crate::borda_multi(lists, FusionConfig::default()),
+            Self::Condorcet => crate::condorcet_multi(lists, FusionConfig::default()),
+            Self::Copeland => crate::copeland_multi(lists, FusionConfig::default()),
+            Self::MedianRank => crate::median_rank_multi(lists, FusionConfig::default()),
             Self::Weighted { .. } => {
                 // For multi-list weighted, use equal weights
                 // (users should use weighted_multi directly for custom weights)
@@ -3239,6 +3251,177 @@ where
     finalize(scores, config.top_k)
 }
 
+/// Copeland fusion -- pairwise net wins across ranked lists.
+///
+/// For each document pair (d1, d2), counts how many input lists rank d1 above d2.
+/// Score = (pairwise wins) - (pairwise losses). This provides a complete ranking
+/// where Condorcet only counts wins.
+///
+/// Copeland is more discriminative than Condorcet and Borda, and satisfies the
+/// Condorcet winner criterion (a document beating all others pairwise always ranks first).
+///
+/// # Reference
+///
+/// Tyomkin & Kurland, "Analyzing Fusion Methods Using the Condorcet Rule," SIGIR 2024.
+/// Shows Copeland beats both CondorcetFuse and Borda on TREC tracks.
+///
+/// # Complexity
+///
+/// O(n^2 * m) where n = total documents, m = number of input lists.
+#[must_use]
+pub fn copeland<I: Clone + Eq + Hash>(
+    results_a: &[(I, f32)],
+    results_b: &[(I, f32)],
+) -> Vec<(I, f32)> {
+    copeland_multi(&[results_a, results_b], FusionConfig::default())
+}
+
+/// Copeland fusion for 3+ result lists.
+#[must_use]
+pub fn copeland_multi<I, L>(lists: &[L], config: FusionConfig) -> Vec<(I, f32)>
+where
+    I: Clone + Eq + Hash,
+    L: AsRef<[(I, f32)]>,
+{
+    if lists.is_empty() {
+        return Vec::new();
+    }
+
+    // Build rank maps: doc_id -> rank in each list (None = absent)
+    let mut doc_ranks: HashMap<I, Vec<Option<usize>>> = HashMap::new();
+    let mut all_docs: std::collections::HashSet<I> = std::collections::HashSet::new();
+
+    for list in lists {
+        for (id, _) in list.as_ref() {
+            all_docs.insert(id.clone());
+        }
+    }
+
+    for doc_id in &all_docs {
+        doc_ranks.insert(doc_id.clone(), vec![None; lists.len()]);
+    }
+
+    for (list_idx, list) in lists.iter().enumerate() {
+        for (rank, (id, _)) in list.as_ref().iter().enumerate() {
+            if let Some(ranks) = doc_ranks.get_mut(id) {
+                ranks[list_idx] = Some(rank);
+            }
+        }
+    }
+
+    // Copeland: score = wins - losses (net pairwise preference)
+    let mut scores: HashMap<I, f32> = HashMap::new();
+    let doc_vec: Vec<I> = all_docs.into_iter().collect();
+
+    for (i, d1) in doc_vec.iter().enumerate() {
+        let mut net = 0i32;
+
+        for (j, d2) in doc_vec.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+
+            let d1_ranks = &doc_ranks[d1];
+            let d2_ranks = &doc_ranks[d2];
+
+            let mut d1_preferred = 0;
+            let mut d2_preferred = 0;
+
+            for (r1, r2) in d1_ranks.iter().zip(d2_ranks.iter()) {
+                match (r1, r2) {
+                    (Some(rank1), Some(rank2)) => {
+                        if rank1 < rank2 {
+                            d1_preferred += 1;
+                        } else if rank2 < rank1 {
+                            d2_preferred += 1;
+                        }
+                    }
+                    (Some(_), None) => d1_preferred += 1, // present beats absent
+                    (None, Some(_)) => d2_preferred += 1,
+                    (None, None) => {}
+                }
+            }
+
+            // Majority rule
+            if d1_preferred > d2_preferred {
+                net += 1; // win
+            } else if d2_preferred > d1_preferred {
+                net -= 1; // loss
+            }
+            // tie: net unchanged
+        }
+
+        scores.insert(d1.clone(), net as f32);
+    }
+
+    finalize(scores, config.top_k)
+}
+
+/// Median Rank Aggregation.
+///
+/// Scores each document by the median of its ranks across all input lists.
+/// Documents not in a list receive a penalty rank of `max_rank + 1`.
+///
+/// Lower median rank = higher fusion score. The output is normalized to
+/// descending scores (higher = better) for consistency with other fusion methods.
+///
+/// Outlier-robust: a single bad retriever rank has minimal effect on the median.
+#[must_use]
+pub fn median_rank<I: Clone + Eq + Hash>(
+    results_a: &[(I, f32)],
+    results_b: &[(I, f32)],
+) -> Vec<(I, f32)> {
+    median_rank_multi(&[results_a, results_b], FusionConfig::default())
+}
+
+/// Median Rank Aggregation for 3+ result lists.
+#[must_use]
+pub fn median_rank_multi<I, L>(lists: &[L], config: FusionConfig) -> Vec<(I, f32)>
+where
+    I: Clone + Eq + Hash,
+    L: AsRef<[(I, f32)]>,
+{
+    if lists.is_empty() {
+        return Vec::new();
+    }
+
+    // Find penalty rank: max list length + 1
+    let max_len = lists.iter().map(|l| l.as_ref().len()).max().unwrap_or(0);
+    let penalty_rank = max_len + 1;
+
+    // Collect all docs and their ranks
+    let mut doc_ranks: HashMap<I, Vec<usize>> = HashMap::new();
+
+    for list in lists {
+        for (rank, (id, _)) in list.as_ref().iter().enumerate() {
+            doc_ranks.entry(id.clone()).or_default().push(rank);
+        }
+    }
+
+    // Compute median rank for each doc, converting to a descending score
+    let mut scores: HashMap<I, f32> = HashMap::new();
+
+    for (id, mut ranks) in doc_ranks {
+        // Pad with penalty_rank for lists where doc is absent
+        while ranks.len() < lists.len() {
+            ranks.push(penalty_rank);
+        }
+        ranks.sort_unstable();
+
+        let median = if ranks.len() % 2 == 1 {
+            ranks[ranks.len() / 2] as f32
+        } else {
+            (ranks[ranks.len() / 2 - 1] + ranks[ranks.len() / 2]) as f32 / 2.0
+        };
+
+        // Invert: lower median rank -> higher score
+        // Use 1/(1+median) so scores are in (0, 1] and descending
+        scores.insert(id, 1.0 / (1.0 + median));
+    }
+
+    finalize(scores, config.top_k)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Diversity-Aware Reranking
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4887,6 +5070,157 @@ mod tests {
 
         // Different lengths
         assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+    }
+
+    // ── Copeland & Median Rank Tests ───────────────────────────────────────
+
+    #[test]
+    fn copeland_basic() {
+        // Three lists, d2 is preferred by majority in all pairwise comparisons
+        let a = ranked(&["d1", "d2", "d3"]);
+        let b = ranked(&["d2", "d1", "d3"]);
+        let c = ranked(&["d2", "d3", "d1"]);
+
+        let f = copeland_multi(&[&a, &b, &c], FusionConfig::default());
+        // d2 ranks first in 2/3 lists vs d1, and first in all vs d3
+        assert_eq!(f[0].0, "d2", "d2 should be Copeland winner");
+    }
+
+    #[test]
+    fn copeland_net_wins() {
+        // d1 at rank 0 in both lists. d2 at rank 1 in both. d3 at rank 2 in both.
+        let a = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7)];
+        let b = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7)];
+
+        let f = copeland(&a, &b);
+        // d1 beats both d2 and d3 in both lists: net = +2
+        // d2 loses to d1, beats d3: net = 0
+        // d3 loses to both: net = -2
+        assert_eq!(f[0].0, "d1");
+        assert!((f[0].1 - 2.0).abs() < 1e-6, "d1 net wins should be 2");
+        assert_eq!(f[2].0, "d3");
+        assert!((f[2].1 - (-2.0)).abs() < 1e-6, "d3 net wins should be -2");
+    }
+
+    #[test]
+    fn copeland_vs_condorcet_more_discriminative() {
+        // Copeland distinguishes between "close loser" and "total loser"
+        // Condorcet only counts wins, so both losers get the same score
+        let a = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7)];
+        let b = vec![("d1", 0.9), ("d3", 0.8), ("d2", 0.7)];
+
+        let cope = copeland(&a, &b);
+        let cond = condorcet(&a, &b);
+
+        // Condorcet: d1=2 wins, d2=0 wins (ties with d3), d3=0 wins
+        // Copeland: d1=+2, d2=0 (1 win, 1 loss), d3=0 (1 win, 1 loss)
+        // Both give d1 first place
+        assert_eq!(cope[0].0, "d1");
+        assert_eq!(cond[0].0, "d1");
+    }
+
+    #[test]
+    fn copeland_commutative() {
+        let a = ranked(&["d1", "d2", "d3"]);
+        let b = ranked(&["d3", "d1", "d2"]);
+
+        let f1 = copeland(&a, &b);
+        let f2 = copeland(&b, &a);
+
+        // Same results regardless of input order
+        assert_eq!(f1.len(), f2.len());
+        for (r1, r2) in f1.iter().zip(f2.iter()) {
+            assert_eq!(r1.0, r2.0);
+            assert!((r1.1 - r2.1).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn median_rank_basic() {
+        // d1: rank 0 in both lists -> median 0 -> score 1/(1+0) = 1.0
+        // d2: rank 1 in list a, rank 0 in list b -> median 0.5 -> score 1/1.5
+        // d3: rank 2 in list a, absent in list b -> ranks [2, 3] -> median 2.5
+        let a = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7)];
+        let b = vec![("d1", 0.9), ("d2", 0.8)];
+
+        let f = median_rank(&a, &b);
+        assert_eq!(f[0].0, "d1", "d1 should rank first (median rank 0)");
+        assert!((f[0].1 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn median_rank_outlier_robust() {
+        // d1: ranks [0, 0, 100] -> median 0 (outlier ignored)
+        // d2: ranks [1, 1, 1] -> median 1
+        // With 3 lists, d1 should still rank above d2 despite one terrible rank
+        let a = vec![("d1", 0.9), ("d2", 0.8)];
+        let b = vec![("d1", 0.9), ("d2", 0.8)];
+        // In list c, d1 is at rank 5 (far down), d2 is at rank 0
+        let c: Vec<(&str, f32)> = vec![
+            ("x1", 0.9),
+            ("x2", 0.8),
+            ("x3", 0.7),
+            ("x4", 0.6),
+            ("x5", 0.5),
+            ("d1", 0.4),
+            ("d2", 0.3),
+        ];
+
+        let f = median_rank_multi(&[&a, &b, &c], FusionConfig::default());
+
+        let d1_pos = f.iter().position(|(id, _)| *id == "d1").unwrap();
+        let d2_pos = f.iter().position(|(id, _)| *id == "d2").unwrap();
+        // d1 median rank = 0 (ranks: [0, 0, 5] -> sorted [0, 0, 5] -> median 0)
+        // d2 median rank = 1 (ranks: [1, 1, 6] -> sorted [1, 1, 6] -> median 1)
+        assert!(
+            d1_pos < d2_pos,
+            "d1 should rank above d2 (outlier-robust median)"
+        );
+    }
+
+    #[test]
+    fn median_rank_commutative() {
+        let a = ranked(&["d1", "d2", "d3"]);
+        let b = ranked(&["d3", "d1", "d2"]);
+
+        let f1 = median_rank(&a, &b);
+        let f2 = median_rank(&b, &a);
+
+        assert_eq!(f1.len(), f2.len());
+        for (r1, r2) in f1.iter().zip(f2.iter()) {
+            assert_eq!(r1.0, r2.0);
+            assert!((r1.1 - r2.1).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn fusion_method_copeland_dispatch() {
+        let a = ranked(&["d1", "d2", "d3"]);
+        let b = ranked(&["d2", "d1", "d3"]);
+
+        let direct = copeland(&a, &b);
+        let via_enum = FusionMethod::Copeland.fuse(&a, &b);
+
+        assert_eq!(direct.len(), via_enum.len());
+        for (d, e) in direct.iter().zip(via_enum.iter()) {
+            assert_eq!(d.0, e.0);
+            assert!((d.1 - e.1).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn fusion_method_median_rank_dispatch() {
+        let a = ranked(&["d1", "d2", "d3"]);
+        let b = ranked(&["d3", "d1", "d2"]);
+
+        let direct = median_rank(&a, &b);
+        let via_enum = FusionMethod::MedianRank.fuse(&a, &b);
+
+        assert_eq!(direct.len(), via_enum.len());
+        for (d, e) in direct.iter().zip(via_enum.iter()) {
+            assert_eq!(d.0, e.0);
+            assert!((d.1 - e.1).abs() < 1e-6);
+        }
     }
 
     // ── Evaluation Metric Tests ──────────────────────────────────────────────
