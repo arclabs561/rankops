@@ -312,13 +312,6 @@ pub mod explain {
 
 // WASM bindings live in the separate `rankops-wasm` crate.
 
-/// Strategy module for runtime fusion method selection.
-///
-/// Enables dynamic selection of fusion methods without trait objects.
-pub mod strategy {
-    pub use crate::FusionStrategy;
-}
-
 /// Validation module for fusion results.
 ///
 /// Provides utilities to validate fusion results, ensuring they meet expected
@@ -664,52 +657,6 @@ impl FusionMethod {
 // RRF (Reciprocal Rank Fusion)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Reciprocal Rank Fusion of two result lists with default config (k=60).
-///
-/// Formula: `score(d) = Σ 1/(k + rank)` where rank is 0-indexed.
-///
-/// **Why RRF?** Different retrievers use incompatible score scales (BM25: 0-100,
-/// dense: 0-1). RRF solves this by ignoring scores entirely and using only rank
-/// positions. The reciprocal formula ensures:
-/// - Top positions dominate (rank 0 gets 1/60 = 0.017, rank 5 gets 1/65 = 0.015)
-/// - Multiple list agreement is rewarded (documents appearing in both lists score higher)
-/// - No normalization needed (works with any score distribution)
-///
-/// **When to use**: Hybrid search with incompatible score scales, zero-configuration needs.
-/// **When NOT to use**: When score scales are compatible, CombSUM achieves ~3-4% better NDCG.
-///
-/// Use [`rrf_with_config`] to customize the k parameter (lower k = more top-heavy).
-///
-/// # Duplicate Document IDs
-///
-/// If a document ID appears multiple times in the same list, **all occurrences contribute**
-/// to the RRF score based on their respective ranks. For example, if "d1" appears at
-/// rank 0 and rank 5 in list A, its contribution from list A is `1/(k+0) + 1/(k+5)`.
-/// This differs from some implementations that take only the first occurrence.
-///
-/// # Complexity
-///
-/// O(n log n) where n = |a| + |b| (dominated by final sort).
-///
-/// # Input Validation
-///
-/// This function does not validate inputs. For validation, use `validate()`
-/// after fusion. Edge cases handled:
-/// - Empty lists: Returns items from non-empty list(s)
-/// - k=0: Returns empty Vec (use `validate()` to catch this)
-/// - Non-finite scores: Ignored (RRF is rank-based)
-///
-/// # Example
-///
-/// ```rust
-/// use rankops::rrf;
-///
-/// let sparse = vec![("d1", 0.9), ("d2", 0.5)];
-/// let dense = vec![("d2", 0.8), ("d3", 0.3)];
-///
-/// let fused = rrf(&sparse, &dense);
-/// assert_eq!(fused[0].0, "d2"); // appears in both lists (consensus)
-/// ```
 #[must_use]
 /// Reciprocal Rank Fusion (RRF) with default configuration (k=60).
 ///
@@ -842,43 +789,6 @@ pub fn rrf_with_config<I: Clone + Eq + Hash>(
     }
 
     finalize(scores, config.top_k)
-}
-
-/// RRF with preallocated output buffer.
-#[allow(clippy::cast_precision_loss)]
-pub fn rrf_into<I: Clone + Eq + Hash>(
-    results_a: &[(I, f32)],
-    results_b: &[(I, f32)],
-    config: RrfConfig,
-    output: &mut Vec<(I, f32)>,
-) {
-    output.clear();
-    let k = config.k as f32;
-    let mut scores: HashMap<I, f32> = HashMap::with_capacity(results_a.len() + results_b.len());
-
-    // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
-    for (rank, (id, _)) in results_a.iter().enumerate() {
-        let contribution = 1.0 / (k + rank as f32);
-        if let Some(score) = scores.get_mut(id) {
-            *score += contribution;
-        } else {
-            scores.insert(id.clone(), contribution);
-        }
-    }
-    for (rank, (id, _)) in results_b.iter().enumerate() {
-        let contribution = 1.0 / (k + rank as f32);
-        if let Some(score) = scores.get_mut(id) {
-            *score += contribution;
-        } else {
-            scores.insert(id.clone(), contribution);
-        }
-    }
-
-    output.extend(scores);
-    sort_scored_desc(output);
-    if let Some(top_k) = config.top_k {
-        output.truncate(top_k);
-    }
 }
 
 /// RRF for 3+ result lists.
@@ -2875,128 +2785,6 @@ fn build_explained_results<I: Clone + Eq + Hash>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trait-Based Abstraction
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Fusion strategy enum for runtime dispatch.
-///
-/// This enables dynamic selection of fusion methods without trait objects.
-///
-/// # Example
-///
-/// ```rust
-/// use rankops::FusionStrategy;
-///
-/// let list1 = vec![("d1", 1.0), ("d2", 0.5)];
-/// let list2 = vec![("d2", 0.9), ("d3", 0.8)];
-/// let strategy = FusionStrategy::rrf(60);
-/// let result = strategy.fuse(&[&list1[..], &list2[..]]);
-/// ```
-#[derive(Debug, Clone)]
-pub enum FusionStrategy {
-    /// RRF with custom k.
-    Rrf {
-        /// Smoothing constant (typically 60).
-        k: u32,
-    },
-    /// CombSUM.
-    CombSum,
-    /// CombMNZ.
-    CombMnz,
-    /// Weighted fusion with custom weights.
-    Weighted {
-        /// Per-source fusion weights.
-        weights: Vec<f32>,
-        /// Whether to normalize scores before weighting.
-        normalize: bool,
-    },
-}
-
-impl FusionStrategy {
-    /// Fuse multiple ranked lists.
-    ///
-    /// # Arguments
-    /// * `runs` - Slice of ranked lists, each as (ID, score) pairs
-    ///
-    /// # Returns
-    /// Combined list sorted by fused score (descending)
-    pub fn fuse<I: Clone + Eq + Hash>(&self, runs: &[&[(I, f32)]]) -> Vec<(I, f32)> {
-        match self {
-            Self::Rrf { k } => rrf_multi(runs, RrfConfig::new(*k)),
-            Self::CombSum => combsum_multi(runs, FusionConfig::default()),
-            Self::CombMnz => combmnz_multi(runs, FusionConfig::default()),
-            Self::Weighted { weights, normalize } => {
-                if runs.len() != weights.len() {
-                    // Mismatched lengths: return empty rather than panic
-                    // Callers should validate inputs before calling fuse()
-                    return Vec::new();
-                }
-                let lists: Vec<_> = runs
-                    .iter()
-                    .zip(weights.iter())
-                    .map(|(run, &w)| (*run, w))
-                    .collect();
-                // Unwrap is safe here because we validate weights in weighted_multi
-                // If weights sum to zero, returns empty Vec (graceful degradation)
-                weighted_multi(&lists, *normalize, None).unwrap_or_default()
-            }
-        }
-    }
-
-    /// Human-readable name of this fusion method.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Rrf { .. } => "rrf",
-            Self::CombSum => "combsum",
-            Self::CombMnz => "combmnz",
-            Self::Weighted { .. } => "weighted",
-        }
-    }
-
-    /// Whether this method uses score values (true) or only ranks (false).
-    pub fn uses_scores(&self) -> bool {
-        match self {
-            Self::Rrf { .. } => false,
-            Self::CombSum | Self::CombMnz | Self::Weighted { .. } => true,
-        }
-    }
-}
-
-// Convenience constructors for FusionStrategy
-impl FusionStrategy {
-    /// Create RRF strategy with custom k.
-    #[must_use]
-    pub fn rrf(k: u32) -> Self {
-        assert!(k >= 1, "k must be >= 1");
-        Self::Rrf { k }
-    }
-
-    /// Create RRF strategy with default k=60.
-    #[must_use]
-    pub fn rrf_default() -> Self {
-        Self::Rrf { k: 60 }
-    }
-
-    /// Create CombSUM strategy.
-    #[must_use]
-    pub fn combsum() -> Self {
-        Self::CombSum
-    }
-
-    /// Create CombMNZ strategy.
-    #[must_use]
-    pub fn combmnz() -> Self {
-        Self::CombMnz
-    }
-
-    /// Create weighted strategy with custom weights.
-    #[must_use]
-    pub fn weighted(weights: Vec<f32>, normalize: bool) -> Self {
-        Self::Weighted { weights, normalize }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Additional Algorithms
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -4076,8 +3864,6 @@ pub fn hit_rate<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k:
 /// Optimization configuration for hyperparameter search.
 #[derive(Debug, Clone)]
 pub struct OptimizeConfig {
-    /// Fusion method to optimize.
-    pub method: FusionMethod,
     /// Metric to optimize (NDCG, MRR, or Recall).
     pub metric: OptimizeMetric,
     /// Parameter grid to search.
@@ -4176,7 +3962,6 @@ pub fn evaluate_metric<K: Clone + Eq + Hash>(
 ///
 /// ```rust
 /// use rankops::optimize::{optimize_fusion, OptimizeConfig, OptimizeMetric, ParamGrid};
-/// use rankops::FusionMethod;
 ///
 /// let qrels = std::collections::HashMap::from([
 ///     ("doc1", 2), // highly relevant
@@ -4189,7 +3974,6 @@ pub fn evaluate_metric<K: Clone + Eq + Hash>(
 /// ];
 ///
 /// let config = OptimizeConfig {
-///     method: FusionMethod::Rrf { k: 60 }, // will be overridden
 ///     metric: OptimizeMetric::Ndcg { k: 10 },
 ///     param_grid: ParamGrid::RrfK {
 ///         values: vec![20, 40, 60, 100],
@@ -4291,18 +4075,6 @@ mod tests {
         let f = rrf_with_config(&a, &b, RrfConfig::default().with_top_k(2));
 
         assert_eq!(f.len(), 2);
-    }
-
-    #[test]
-    fn rrf_into_works() {
-        let a = ranked(&["d1", "d2"]);
-        let b = ranked(&["d2", "d3"]);
-        let mut out = Vec::new();
-
-        rrf_into(&a, &b, RrfConfig::default(), &mut out);
-
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[0].0, "d2");
     }
 
     #[test]
