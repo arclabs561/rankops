@@ -132,6 +132,19 @@ The `diagnostics` module helps decide whether fusion is beneficial:
 
 Based on Louis et al., "Know When to Fuse" (2024): high complementarity (>0.5) predicts fusion benefit; low correlation between rankers predicts fusion benefit.
 
+## Adapters
+
+The `adapt` module converts retriever outputs to rankops format:
+
+| Function | Input | Conversion |
+|----------|-------|------------|
+| `from_distances` | L2/Euclidean (lower=closer) | `1/(1+d)` to (0, 1] |
+| `from_similarities` | Cosine sim (higher=better) | Sort descending |
+| `from_logits` | Cross-encoder logits (unbounded) | Sigmoid to (0, 1) |
+| `from_inner_product` | Dot product (higher=better) | Sort descending |
+
+All have `_mapped` variants for ID type conversion (e.g., `u32` doc index to `&str` doc name).
+
 ## Pipeline
 
 The `pipeline` module provides composable post-retrieval operations:
