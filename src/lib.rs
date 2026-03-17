@@ -373,6 +373,19 @@ pub enum FusionMethod {
     Copeland,
     /// Median Rank Aggregation — median rank across lists. Outlier-robust.
     MedianRank,
+    /// `CombMAX` — maximum score across lists.
+    CombMax,
+    /// `CombMIN` — minimum score across lists (conservative).
+    CombMin,
+    /// `CombMED` — median score across lists.
+    CombMed,
+    /// `CombANZ` — average of non-zero scores.
+    CombAnz,
+    /// Rank-Biased Centroids with configurable persistence.
+    Rbc {
+        /// Persistence parameter (default: 0.8). Higher = more weight to lower ranks.
+        persistence: f32,
+    },
     /// Weighted combination with custom weights.
     Weighted {
         /// Weight for first list.
@@ -437,6 +450,18 @@ impl FusionMethod {
     #[must_use]
     pub const fn isr_with_k(k: u32) -> Self {
         Self::Isr { k }
+    }
+
+    /// Create RBC method with default persistence 0.8.
+    #[must_use]
+    pub const fn rbc() -> Self {
+        Self::Rbc { persistence: 0.8 }
+    }
+
+    /// Create RBC method with custom persistence.
+    #[must_use]
+    pub const fn rbc_with_persistence(persistence: f32) -> Self {
+        Self::Rbc { persistence }
     }
 
     /// Create weighted method with custom weights.
@@ -523,6 +548,11 @@ impl FusionMethod {
             Self::Condorcet => crate::condorcet(a, b),
             Self::Copeland => crate::copeland(a, b),
             Self::MedianRank => crate::median_rank(a, b),
+            Self::CombMax => crate::combmax(a, b),
+            Self::CombMin => crate::combmin(a, b),
+            Self::CombMed => crate::combmed(a, b),
+            Self::CombAnz => crate::combanz(a, b),
+            Self::Rbc { persistence } => crate::rbc_multi(&[a, b], *persistence),
             Self::Weighted {
                 weight_a,
                 weight_b,
@@ -571,14 +601,21 @@ impl FusionMethod {
             Self::Condorcet => crate::condorcet_multi(lists, FusionConfig::default()),
             Self::Copeland => crate::copeland_multi(lists, FusionConfig::default()),
             Self::MedianRank => crate::median_rank_multi(lists, FusionConfig::default()),
-            Self::Weighted { .. } => {
-                // For multi-list weighted, use equal weights
-                // (users should use weighted_multi directly for custom weights)
+            Self::CombMax => crate::combmax_multi(lists, FusionConfig::default()),
+            Self::CombMin => crate::combmin_multi(lists, FusionConfig::default()),
+            Self::CombMed => crate::combmed_multi(lists, FusionConfig::default()),
+            Self::CombAnz => crate::combanz_multi(lists, FusionConfig::default()),
+            Self::Rbc { persistence } => crate::rbc_multi(lists, *persistence),
+            Self::Weighted { normalize, .. } => {
                 if lists.len() == 2 {
                     self.fuse(lists[0].as_ref(), lists[1].as_ref())
                 } else {
-                    // Fall back to equal-weighted combsum for 3+ lists
-                    crate::combsum_multi(lists, FusionConfig::default())
+                    // Equal weights for 3+ lists
+                    let weighted_lists: Vec<_> = lists
+                        .iter()
+                        .map(|l| (l.as_ref(), 1.0 / lists.len() as f32))
+                        .collect();
+                    crate::weighted_multi(&weighted_lists, *normalize, None).unwrap_or_default()
                 }
             }
             Self::Dbsf => crate::dbsf_multi(lists, FusionConfig::default()),
