@@ -1615,49 +1615,18 @@ pub fn dbsf_with_config<I: Clone + Eq + Hash>(
 
 /// DBSF for 3+ result lists.
 ///
-/// # Empty Lists
-///
-/// If `lists` is empty, returns an empty result. Empty lists within the slice
-/// contribute zero scores (documents not appearing in those lists receive
-/// no z-score contribution from them).
-///
-/// # Degenerate Cases
-///
-/// If all scores in a list are equal (zero variance), that list contributes
-/// z-score=0.0 for all documents, which is mathematically correct but
-/// effectively ignores that list's contribution.
+/// Delegates to [`standardized_multi`] with the DBSF default clip range [-3, 3].
 #[must_use]
 pub fn dbsf_multi<I, L>(lists: &[L], config: FusionConfig) -> Vec<(I, f32)>
 where
     I: Clone + Eq + Hash,
     L: AsRef<[(I, f32)]>,
 {
-    if lists.is_empty() {
-        return Vec::new();
-    }
-    let estimated_size: usize = lists.iter().map(|l| l.as_ref().len()).sum();
-    let mut scores: HashMap<I, f32> = HashMap::with_capacity(estimated_size);
-
-    for list in lists {
-        let items = list.as_ref();
-        let (mean, std) = zscore_params(items);
-
-        for (id, s) in items {
-            // Z-score normalize and clip to [-3, 3]
-            let z = if std > SCORE_RANGE_EPSILON {
-                ((s - mean) / std).clamp(-3.0, 3.0)
-            } else {
-                0.0 // All scores equal
-            };
-            if let Some(score) = scores.get_mut(id) {
-                *score += z;
-            } else {
-                scores.insert(id.clone(), z);
-            }
-        }
-    }
-
-    finalize(scores, config.top_k)
+    let std_config = StandardizedConfig {
+        clip_range: (-3.0, 3.0),
+        top_k: config.top_k,
+    };
+    standardized_multi(lists, std_config)
 }
 
 /// Compute mean and standard deviation for z-score normalization.
@@ -1703,6 +1672,18 @@ impl StandardizedConfig {
     pub const fn new(clip_range: (f32, f32)) -> Self {
         Self {
             clip_range,
+            top_k: None,
+        }
+    }
+
+    /// DBSF preset: z-score normalization with [-3, 3] clipping.
+    ///
+    /// Equivalent to `StandardizedConfig::default()`. DBSF (Distribution-Based Score Fusion)
+    /// is standardized fusion with the conventional 3-sigma clip range.
+    #[must_use]
+    pub const fn dbsf() -> Self {
+        Self {
+            clip_range: (-3.0, 3.0),
             top_k: None,
         }
     }
