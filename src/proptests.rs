@@ -149,12 +149,17 @@ mod tests {
                 rrf(&a, &b),
                 combsum(&a, &b),
                 combmnz(&a, &b),
+                combmax(&a, &b),
+                combmin(&a, &b),
+                combmed(&a, &b),
+                combanz(&a, &b),
                 borda(&a, &b),
                 isr(&a, &b),
                 dbsf(&a, &b),
                 condorcet(&a, &b),
                 copeland(&a, &b),
                 median_rank(&a, &b),
+                rbc(&a, &b),
             ] {
                 for window in result.windows(2) {
                     prop_assert!(
@@ -171,12 +176,17 @@ mod tests {
                 rrf(&a, &b),
                 combsum(&a, &b),
                 combmnz(&a, &b),
+                combmax(&a, &b),
+                combmin(&a, &b),
+                combmed(&a, &b),
+                combanz(&a, &b),
                 borda(&a, &b),
                 isr(&a, &b),
                 dbsf(&a, &b),
                 condorcet(&a, &b),
                 copeland(&a, &b),
                 median_rank(&a, &b),
+                rbc(&a, &b),
             ] {
                 let mut seen = std::collections::HashSet::new();
                 for (id, _) in &result {
@@ -230,6 +240,126 @@ mod tests {
                 let score_ba = ba_map.get(id).expect("same keys");
                 prop_assert!((score_ab - score_ba).abs() < 1e-6,
                     "MedianRank not commutative for id {:?}: {} vs {}", id, score_ab, score_ba);
+            }
+        }
+
+        #[test]
+        fn combmax_commutative(a in arb_results(20), b in arb_results(20)) {
+            let ab = combmax(&a, &b);
+            let ba = combmax(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-5);
+            }
+        }
+
+        #[test]
+        fn combmin_commutative(a in arb_results(20), b in arb_results(20)) {
+            let ab = combmin(&a, &b);
+            let ba = combmin(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-5);
+            }
+        }
+
+        #[test]
+        fn combmed_commutative(a in arb_results(20), b in arb_results(20)) {
+            let ab = combmed(&a, &b);
+            let ba = combmed(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-5);
+            }
+        }
+
+        #[test]
+        fn combanz_commutative(a in arb_results(20), b in arb_results(20)) {
+            let ab = combanz(&a, &b);
+            let ba = combanz(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-5);
+            }
+        }
+
+        #[test]
+        fn rbc_commutative(a in arb_results(20), b in arb_results(20)) {
+            let ab = rbc(&a, &b);
+            let ba = rbc(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-5);
+            }
+        }
+
+        #[test]
+        fn condorcet_commutative(a in arb_results(15), b in arb_results(15)) {
+            let ab = condorcet(&a, &b);
+            let ba = condorcet(&b, &a);
+
+            let ab_map: HashMap<_, _> = ab.into_iter().collect();
+            let ba_map: HashMap<_, _> = ba.into_iter().collect();
+
+            prop_assert_eq!(ab_map.len(), ba_map.len());
+            for (id, score_ab) in &ab_map {
+                let score_ba = ba_map.get(id).expect("same keys");
+                prop_assert!((score_ab - score_ba).abs() < 1e-6);
+            }
+        }
+
+        #[test]
+        fn fusion_method_dispatch_matches_direct(a in arb_results(15), b in arb_results(15)) {
+            // Verify FusionMethod dispatch produces same results as direct calls
+            let methods: Vec<(FusionMethod, Vec<(u32, f32)>)> = vec![
+                (FusionMethod::rrf(), rrf(&a, &b)),
+                (FusionMethod::CombSum, combsum(&a, &b)),
+                (FusionMethod::CombMnz, combmnz(&a, &b)),
+                (FusionMethod::CombMax, combmax(&a, &b)),
+                (FusionMethod::CombMin, combmin(&a, &b)),
+                (FusionMethod::CombMed, combmed(&a, &b)),
+                (FusionMethod::CombAnz, combanz(&a, &b)),
+                (FusionMethod::Borda, borda(&a, &b)),
+                (FusionMethod::Dbsf, dbsf(&a, &b)),
+            ];
+
+            for (method, direct) in &methods {
+                let via_enum = method.fuse(&a, &b);
+                let direct_map: HashMap<_, _> = direct.iter().cloned().collect();
+                let enum_map: HashMap<_, _> = via_enum.into_iter().collect();
+
+                prop_assert_eq!(direct_map.len(), enum_map.len(),
+                    "Length mismatch for {:?}", method);
+                for (id, score_d) in &direct_map {
+                    let score_e = enum_map.get(id).expect("same keys");
+                    prop_assert!((score_d - score_e).abs() < 1e-5,
+                        "Score mismatch for {:?}, id {:?}: {} vs {}", method, id, score_d, score_e);
+                }
             }
         }
 
