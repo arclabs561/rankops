@@ -366,6 +366,162 @@ fn percentile(sorted: &[f32], p: f32) -> f32 {
     }
 }
 
+/// Diagnostic report for 3+ retrievers.
+#[derive(Debug, Clone)]
+pub struct MultiDiagnostics<I> {
+    /// Score statistics per retriever (name, stats).
+    pub stats: Vec<(String, ScoreStats)>,
+    /// Pairwise overlap matrix (i, j, overlap_ratio).
+    pub pairwise_overlap: Vec<(usize, usize, f32)>,
+    /// Pairwise rank correlation matrix (i, j, tau).
+    pub pairwise_correlation: Vec<(usize, usize, f32)>,
+    /// Pairwise complementarity matrix (i, j, complementarity). Only if qrels provided.
+    pub pairwise_complementarity: Vec<(usize, usize, f32)>,
+    /// Overall overlap: fraction of docs appearing in all lists.
+    pub full_overlap: f32,
+    /// Documents appearing in only one list.
+    pub unique_docs: Vec<(usize, Vec<I>)>,
+    /// Overall fusion suggestion.
+    pub suggestion: FusionSuggestion,
+}
+
+/// Run diagnostics across 3+ named retriever runs.
+///
+/// Returns pairwise overlap, correlation, and complementarity matrices,
+/// plus an overall fusion recommendation.
+pub fn diagnose_multi<I: Clone + Eq + Hash>(
+    runs: &[(&str, &[(I, f32)])],
+    qrels: Option<&HashMap<I, u32>>,
+) -> MultiDiagnostics<I> {
+    let n = runs.len();
+
+    // Per-run stats
+    let stats: Vec<_> = runs
+        .iter()
+        .filter_map(|(name, list)| score_stats(list).map(|s| (name.to_string(), s)))
+        .collect();
+
+    // Pairwise matrices
+    let mut pairwise_overlap = Vec::new();
+    let mut pairwise_correlation = Vec::new();
+    let mut pairwise_complementarity = Vec::new();
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            pairwise_overlap.push((i, j, overlap_ratio(runs[i].1, runs[j].1)));
+            pairwise_correlation.push((i, j, rank_correlation(runs[i].1, runs[j].1)));
+
+            if let Some(q) = qrels {
+                pairwise_complementarity.push((i, j, complementarity(runs[i].1, runs[j].1, q)));
+            }
+        }
+    }
+
+    // Full overlap: docs in ALL lists
+    let all_sets: Vec<HashSet<_>> = runs
+        .iter()
+        .map(|(_, list)| list.iter().map(|(id, _)| id).collect::<HashSet<_>>())
+        .collect();
+
+    let full_overlap = if all_sets.is_empty() {
+        0.0
+    } else {
+        let mut intersection = all_sets[0].clone();
+        for set in &all_sets[1..] {
+            intersection = intersection.intersection(set).copied().collect();
+        }
+        let union_size: usize = {
+            let mut union = HashSet::new();
+            for set in &all_sets {
+                union.extend(set.iter().copied());
+            }
+            union.len()
+        };
+        if union_size == 0 {
+            0.0
+        } else {
+            intersection.len() as f32 / union_size as f32
+        }
+    };
+
+    // Unique docs per run
+    let mut unique_docs = Vec::new();
+    for (idx, set) in all_sets.iter().enumerate() {
+        let others: HashSet<_> = all_sets
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != idx)
+            .flat_map(|(_, s)| s.iter().copied())
+            .collect();
+        let unique: Vec<I> = set
+            .iter()
+            .filter(|id| !others.contains(*id))
+            .map(|id| (*id).clone())
+            .collect();
+        if !unique.is_empty() {
+            unique_docs.push((idx, unique));
+        }
+    }
+
+    // Overall suggestion
+    let avg_comp = if pairwise_complementarity.is_empty() {
+        None
+    } else {
+        Some(
+            pairwise_complementarity
+                .iter()
+                .map(|(_, _, c)| c)
+                .sum::<f32>()
+                / pairwise_complementarity.len() as f32,
+        )
+    };
+
+    let avg_tau = if pairwise_correlation.is_empty() {
+        0.0
+    } else {
+        pairwise_correlation.iter().map(|(_, _, t)| t).sum::<f32>()
+            / pairwise_correlation.len() as f32
+    };
+
+    let suggestion = if let Some(c) = avg_comp {
+        if c > 0.4 {
+            FusionSuggestion::FuseRecommended {
+                reason: "high average complementarity: retrievers find different relevant docs",
+            }
+        } else if c > 0.15 {
+            FusionSuggestion::FuseWithCaution {
+                reason: "moderate complementarity: tune weights per retriever",
+            }
+        } else {
+            FusionSuggestion::SkipFusion {
+                reason: "low complementarity: retrievers are largely redundant",
+            }
+        }
+    } else if avg_tau.abs() < 0.3 {
+        FusionSuggestion::FuseRecommended {
+            reason: "low average rank correlation: retrievers disagree on ordering",
+        }
+    } else if avg_tau > 0.7 {
+        FusionSuggestion::SkipFusion {
+            reason: "high average rank correlation: retrievers agree, fusion adds little",
+        }
+    } else {
+        FusionSuggestion::FuseWithCaution {
+            reason: "moderate agreement: fusion may help with tuned weights",
+        }
+    };
+
+    MultiDiagnostics {
+        stats,
+        pairwise_overlap,
+        pairwise_correlation,
+        pairwise_complementarity,
+        full_overlap,
+        unique_docs,
+        suggestion,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,5 +643,75 @@ mod tests {
             diag.suggestion,
             FusionSuggestion::SkipFusion { .. }
         ));
+    }
+
+    #[test]
+    fn diagnose_multi_three_retrievers() {
+        let qrels: HashMap<&str, u32> = HashMap::from([
+            ("d1", 1),
+            ("d2", 1),
+            ("d3", 1),
+            ("d4", 1),
+            ("d5", 1),
+            ("d6", 1),
+        ]);
+
+        // Each retriever finds different relevant docs
+        let bm25 = vec![("d1", 0.9), ("d2", 0.8), ("x1", 0.5)];
+        let dense = vec![("d3", 0.9), ("d4", 0.8), ("x2", 0.5)];
+        let sparse = vec![("d5", 0.9), ("d6", 0.8), ("x3", 0.5)];
+
+        let diag = diagnose_multi(
+            &[("bm25", &bm25), ("dense", &dense), ("sparse", &sparse)],
+            Some(&qrels),
+        );
+
+        assert_eq!(diag.stats.len(), 3);
+        // 3 pairs: (0,1), (0,2), (1,2)
+        assert_eq!(diag.pairwise_overlap.len(), 3);
+        assert_eq!(diag.pairwise_correlation.len(), 3);
+        assert_eq!(diag.pairwise_complementarity.len(), 3);
+
+        // All disjoint, full overlap should be 0
+        assert!(diag.full_overlap < 0.01);
+
+        // High complementarity -> should recommend fusion
+        assert!(matches!(
+            diag.suggestion,
+            FusionSuggestion::FuseRecommended { .. }
+        ));
+    }
+
+    #[test]
+    fn diagnose_multi_redundant() {
+        let qrels: HashMap<&str, u32> = HashMap::from([("d1", 1), ("d2", 1)]);
+
+        // All retrievers find same docs
+        let a = vec![("d1", 0.9), ("d2", 0.8)];
+        let b = vec![("d1", 0.7), ("d2", 0.6)];
+        let c = vec![("d1", 0.85), ("d2", 0.75)];
+
+        let diag = diagnose_multi(&[("a", &a), ("b", &b), ("c", &c)], Some(&qrels));
+
+        // Full overlap should be 1.0 (all share d1, d2)
+        assert!((diag.full_overlap - 1.0).abs() < 1e-6);
+
+        // Low complementarity -> skip
+        assert!(matches!(
+            diag.suggestion,
+            FusionSuggestion::SkipFusion { .. }
+        ));
+    }
+
+    #[test]
+    fn diagnose_multi_no_qrels() {
+        let a = vec![("d1", 0.9), ("d2", 0.8)];
+        let b = vec![("d3", 0.9), ("d4", 0.8)];
+
+        let diag = diagnose_multi(&[("a", &a), ("b", &b)], None);
+
+        // No qrels -> no complementarity, use rank correlation
+        assert!(diag.pairwise_complementarity.is_empty());
+        assert_eq!(diag.pairwise_overlap.len(), 1);
     }
 }
