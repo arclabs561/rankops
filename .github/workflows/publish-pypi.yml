@@ -23,13 +23,19 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out dist --manifest-path rankops-python/Cargo.toml
           manylinux: auto
-          working-directory: rankops-python
+          before-script-linux: |
+            # Install Python inside the manylinux Docker container for cross-compile
+            if command -v yum &> /dev/null; then
+              yum install -y python3-devel
+            elif command -v apk &> /dev/null; then
+              apk add python3-dev
+            fi
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-linux-${{ matrix.target }}
-          path: rankops-python/dist/*.whl
+          path: dist/*.whl
 
   macos:
     runs-on: macos-latest
