@@ -2168,7 +2168,7 @@ mod proptests {
             // Number of clusters should be correct (uses max + 1)
             // If it used subtraction or multiplication, cluster count would be wrong
             prop_assert!(pooled.len() <= n_tokens, "Should not exceed original token count");
-            prop_assert!(pooled.len() >= 1, "Should have at least one cluster");
+            prop_assert!(!pooled.is_empty(), "Should have at least one cluster");
         }
 
         /// Hierarchical clustering uses subtraction for distance (1.0 - sim)
