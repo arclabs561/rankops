@@ -10,9 +10,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "innr"
-version = "0.1.6"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8688f9012e86a9d5688ec55aaf83f82cdf2a1e895bc2ed94bf1975f07164916f"
+checksum = "f75d0b29074c87add080dab7566c3a11854cd90a315af73fa5537b4643234142"
 
 [[package]]
 name = "libc"
@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "rankops"
-version = "0.1.0"
+version = "0.1.4"
 dependencies = [
  "innr",
 ]
@@ -148,4 +148,4 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[patch.unused]]
 name = "textprep"
-version = "0.1.1"
+version = "0.1.4"
