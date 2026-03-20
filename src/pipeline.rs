@@ -495,8 +495,8 @@ mod tests {
 
     #[test]
     fn multi_query_fusion_normalized() {
-        let q1 = vec![vec![("d1", 100.0), ("d2", 50.0)]];
-        let q2 = vec![vec![("d1", 0.9), ("d3", 0.5)]];
+        let q1 = [vec![("d1", 100.0), ("d2", 50.0)]];
+        let q2 = [vec![("d1", 0.9), ("d3", 0.5)]];
         let all = vec![q1[0].clone(), q2[0].clone()];
         let all_wrapped = vec![all];
 
