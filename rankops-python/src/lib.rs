@@ -21,6 +21,8 @@
 // Action: Check pyo3 changelog when upgrading to 0.25+ to see if IntoPyObject migration is needed.
 #![allow(deprecated)]
 
+use pyo3::prelude::*;
+use pyo3::types::{PyList, PyTuple};
 use ::rankops::explain::{
     combmnz_explain, combsum_explain, dbsf_explain, rrf_explain, ConsensusReport, Explanation,
     FusedResult, RetrieverId, RetrieverStats, SourceContribution,
@@ -36,8 +38,6 @@ use ::rankops::{
     standardized_with_config, weighted, AdditiveMultiTaskConfig, FusionConfig, Normalization,
     RrfConfig, StandardizedConfig, WeightedConfig,
 };
-use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple};
 
 /// Helper to create (id, score) tuples for Python - PyO3 0.27 compatible
 fn make_result_tuple<'py>(
@@ -374,7 +374,7 @@ fn combmnz_py(
 
 /// CombMNZ fusion for multiple ranked lists.
 #[allow(deprecated)]
-#[pyfunction]
+#[pyfunction(name = "combmnz_multi")]
 #[pyo3(signature = (lists, top_k = None))]
 fn combmnz_multi_py(
     py: Python<'_>,
@@ -455,7 +455,7 @@ fn borda_multi_py(
 
 /// Weighted fusion for two ranked lists.
 #[allow(deprecated)]
-#[pyfunction]
+#[pyfunction(name = "weighted")]
 #[pyo3(signature = (results_a, results_b, weight_a, weight_b, normalize = true, top_k = None))]
 fn weighted_py(
     py: Python<'_>,
@@ -518,7 +518,7 @@ fn dbsf_py(
 
 /// DBSF fusion for multiple ranked lists.
 #[allow(deprecated)]
-#[pyfunction]
+#[pyfunction(name = "dbsf_multi")]
 #[pyo3(signature = (lists, top_k = None))]
 fn dbsf_multi_py(
     py: Python<'_>,
@@ -631,7 +631,7 @@ fn standardized_py(
 /// # Returns
 /// List of (id, score) tuples sorted by fused score (descending)
 #[allow(deprecated)]
-#[pyfunction]
+#[pyfunction(name = "additive_multi_task")]
 #[pyo3(signature = (results_a, results_b, weights = (1.0, 1.0), normalization = "minmax", top_k = None))]
 fn additive_multi_task_py(
     py: Python<'_>,
@@ -757,7 +757,7 @@ fn combsum_explain_py(
 
 /// CombMNZ with explainability.
 #[allow(deprecated)]
-#[pyfunction]
+#[pyfunction(name = "combmnz_explain")]
 #[pyo3(signature = (lists, retriever_ids, top_k = None))]
 fn combmnz_explain_py(
     py: Python<'_>,
@@ -883,7 +883,7 @@ impl FusionConfigPy {
 }
 
 /// Python wrapper for WeightedConfig.
-#[pyclass]
+#[pyclass(name = "WeightedConfig")]
 struct WeightedConfigPy {
     inner: WeightedConfig,
 }
@@ -949,7 +949,7 @@ impl StandardizedConfigPy {
 }
 
 /// Python wrapper for AdditiveMultiTaskConfig.
-#[pyclass]
+#[pyclass(name = "AdditiveMultiTaskConfig")]
 struct AdditiveMultiTaskConfigPy {
     inner: AdditiveMultiTaskConfig,
 }
@@ -1032,7 +1032,7 @@ impl From<FusedResult<String>> for FusedResultPy {
 }
 
 /// Python wrapper for Explanation.
-#[pyclass]
+#[pyclass(name = "Explanation")]
 #[derive(Clone)]
 struct ExplanationPy {
     #[pyo3(get)]
@@ -1086,7 +1086,7 @@ impl From<SourceContribution> for SourceContributionPy {
 }
 
 /// Python wrapper for RetrieverId.
-#[pyclass]
+#[pyclass(name = "RetrieverId")]
 struct RetrieverIdPy {
     inner: RetrieverId,
 }
@@ -1129,7 +1129,7 @@ impl From<ConsensusReport<String>> for ConsensusReportPy {
 }
 
 /// Python wrapper for RetrieverStats.
-#[pyclass]
+#[pyclass(name = "RetrieverStats")]
 #[derive(Clone)]
 struct RetrieverStatsPy {
     #[pyo3(get)]
@@ -1155,7 +1155,7 @@ impl From<RetrieverStats> for RetrieverStatsPy {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Validate that fusion results are sorted by score (descending).
-#[pyfunction]
+#[pyfunction(name = "validate_sorted")]
 fn validate_sorted_py(results: &Bound<'_, PyList>) -> PyResult<ValidationResultPy> {
     let ranked: Vec<(String, f32)> = py_list_to_ranked(results)?;
     let result = validate_sorted(&ranked);
@@ -1171,7 +1171,7 @@ fn validate_no_duplicates_py(results: &Bound<'_, PyList>) -> PyResult<Validation
 }
 
 /// Validate that all scores are finite (not NaN or Infinity).
-#[pyfunction]
+#[pyfunction(name = "validate_finite_scores")]
 fn validate_finite_scores_py(results: &Bound<'_, PyList>) -> PyResult<ValidationResultPy> {
     let ranked: Vec<(String, f32)> = py_list_to_ranked(results)?;
     let result = validate_finite_scores(&ranked);
@@ -1187,7 +1187,7 @@ fn validate_non_negative_scores_py(results: &Bound<'_, PyList>) -> PyResult<Vali
 }
 
 /// Validate that results are within expected bounds.
-#[pyfunction]
+#[pyfunction(name = "validate_bounds")]
 #[pyo3(signature = (results, max_results = None))]
 fn validate_bounds_py(
     results: &Bound<'_, PyList>,
