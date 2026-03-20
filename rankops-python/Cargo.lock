@@ -10,9 +10,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "innr"
-version = "0.1.9"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f75d0b29074c87add080dab7566c3a11854cd90a315af73fa5537b4643234142"
+checksum = "1939fc7c2be2808e0276a82b0630b70882d4a0f8a555ce5fa2064518a6bd7fb2"
 
 [[package]]
 name = "libc"
