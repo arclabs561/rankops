@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rankops"
-version = "0.1.20"
+version = "0.1.21"
 description = "Python bindings for rankops (Rust) — fusion and reranking for hybrid search."
 readme = "README.md"
 requires-python = ">=3.7"
