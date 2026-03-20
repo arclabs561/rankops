@@ -11,8 +11,8 @@ readme = "README.md"
 publish = false
 
 [lib]
-name = "rankops_py"
-crate-type = ["rlib"]
+name = "rankops"
+crate-type = ["cdylib"]
 doc = false
 
 [dependencies]
