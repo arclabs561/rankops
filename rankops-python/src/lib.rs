@@ -27,6 +27,7 @@ use ::rankops::explain::{
     combmnz_explain, combsum_explain, dbsf_explain, rrf_explain, ConsensusReport, Explanation,
     FusedResult, RetrieverId, RetrieverStats, SourceContribution,
 };
+use ::rankops::rerank;
 use ::rankops::validate::{
     validate, validate_bounds, validate_finite_scores, validate_no_duplicates,
     validate_non_negative_scores, validate_sorted, ValidationResult,
@@ -107,6 +108,27 @@ pub fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_bounds_py, m)?)?;
     m.add_function(wrap_pyfunction!(validate_py, m)?)?;
     m.add_class::<ValidationResultPy>()?;
+
+    // Reranking: SIMD ops
+    m.add_function(wrap_pyfunction!(dot_py, m)?)?;
+    m.add_function(wrap_pyfunction!(cosine_py, m)?)?;
+    m.add_function(wrap_pyfunction!(maxsim_py, m)?)?;
+    m.add_function(wrap_pyfunction!(maxsim_cosine_py, m)?)?;
+
+    // Reranking: ColBERT / MaxSim
+    m.add_function(wrap_pyfunction!(maxsim_rank_py, m)?)?;
+    m.add_function(wrap_pyfunction!(maxsim_refine_py, m)?)?;
+    m.add_function(wrap_pyfunction!(maxsim_alignments_py, m)?)?;
+
+    // Reranking: Diversity
+    m.add_function(wrap_pyfunction!(mmr_py, m)?)?;
+    m.add_function(wrap_pyfunction!(dpp_py, m)?)?;
+
+    // Reranking: Matryoshka
+    m.add_function(wrap_pyfunction!(matryoshka_refine_py, m)?)?;
+
+    // Reranking: Utilities
+    m.add_function(wrap_pyfunction!(normalize_scores_py, m)?)?;
 
     Ok(())
 }
@@ -1231,4 +1253,211 @@ impl From<ValidationResult> for ValidationResultPy {
             warnings: result.warnings,
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reranking: SIMD vector operations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Dot product of two vectors (SIMD-accelerated).
+#[pyfunction(name = "dot")]
+fn dot_py(a: Vec<f32>, b: Vec<f32>) -> f32 {
+    rerank::simd::dot(&a, &b)
+}
+
+/// Cosine similarity between two vectors (SIMD-accelerated).
+#[pyfunction(name = "cosine")]
+fn cosine_py(a: Vec<f32>, b: Vec<f32>) -> f32 {
+    rerank::simd::cosine(&a, &b)
+}
+
+/// MaxSim score between query tokens and document tokens.
+///
+/// For each query token, finds the max dot product with any document token,
+/// then sums across query tokens.
+#[pyfunction(name = "maxsim")]
+fn maxsim_py(query_tokens: Vec<Vec<f32>>, doc_tokens: Vec<Vec<f32>>) -> f32 {
+    rerank::simd::maxsim_vecs(&query_tokens, &doc_tokens)
+}
+
+/// MaxSim with cosine similarity instead of dot product.
+#[pyfunction(name = "maxsim_cosine")]
+fn maxsim_cosine_py(query_tokens: Vec<Vec<f32>>, doc_tokens: Vec<Vec<f32>>) -> f32 {
+    rerank::simd::maxsim_cosine_vecs(&query_tokens, &doc_tokens)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reranking: ColBERT / MaxSim ranking
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Rank documents by MaxSim score against a query.
+///
+/// Args:
+///     query_tokens: List of token embeddings for the query.
+///     docs: List of (id, token_embeddings) pairs.
+///     top_k: Optional limit on results.
+///
+/// Returns:
+///     List of (id, score) sorted descending.
+#[allow(deprecated)]
+#[pyfunction(name = "maxsim_rank")]
+#[pyo3(signature = (query_tokens, docs, top_k = None))]
+fn maxsim_rank_py(
+    py: Python<'_>,
+    query_tokens: Vec<Vec<f32>>,
+    docs: Vec<(String, Vec<Vec<f32>>)>,
+    top_k: Option<usize>,
+) -> PyResult<Py<PyList>> {
+    let results = rerank::colbert::maxsim_with_top_k(&query_tokens, &docs, top_k);
+    let out = PyList::empty(py);
+    for (id, score) in results {
+        out.append(make_result_tuple(py, id, score)?)?;
+    }
+    Ok(out.into())
+}
+
+/// Refine candidate results using MaxSim reranking.
+///
+/// Blends original scores with MaxSim scores using alpha.
+///
+/// Args:
+///     candidates: List of (id, score) from first-stage retrieval.
+///     query_tokens: Query token embeddings.
+///     docs: List of (id, token_embeddings) for candidates.
+///     alpha: Blending weight (0.0 = all MaxSim, 1.0 = all original). Default: 0.5.
+///     top_k: Optional limit on results.
+#[allow(deprecated)]
+#[pyfunction(name = "maxsim_refine")]
+#[pyo3(signature = (candidates, query_tokens, docs, alpha = 0.5, top_k = None))]
+fn maxsim_refine_py(
+    py: Python<'_>,
+    candidates: Vec<(String, f32)>,
+    query_tokens: Vec<Vec<f32>>,
+    docs: Vec<(String, Vec<Vec<f32>>)>,
+    alpha: f32,
+    top_k: Option<usize>,
+) -> PyResult<Py<PyList>> {
+    let mut config = rerank::RerankConfig::default().with_alpha(alpha);
+    if let Some(k) = top_k {
+        config = config.with_top_k(k);
+    }
+    let results = rerank::colbert::refine_with_config(&candidates, &query_tokens, &docs, config);
+    let out = PyList::empty(py);
+    for (id, score) in results {
+        out.append(make_result_tuple(py, id, score)?)?;
+    }
+    Ok(out.into())
+}
+
+/// Get token-level alignments between query and document.
+///
+/// Returns list of (query_idx, doc_idx, similarity) triples.
+#[pyfunction(name = "maxsim_alignments")]
+fn maxsim_alignments_py(
+    query_tokens: Vec<Vec<f32>>,
+    doc_tokens: Vec<Vec<f32>>,
+) -> Vec<(usize, usize, f32)> {
+    rerank::simd::maxsim_alignments_vecs(&query_tokens, &doc_tokens)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reranking: Diversity (MMR, DPP)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximal Marginal Relevance diversity reranking.
+///
+/// Args:
+///     candidates: List of (id, score) pairs.
+///     embeddings: List of embedding vectors (one per candidate, same order).
+///     lambda_: Trade-off: 1.0 = pure relevance, 0.0 = pure diversity. Default: 0.5.
+///     k: Number of results to select.
+#[allow(deprecated)]
+#[pyfunction(name = "mmr")]
+#[pyo3(signature = (candidates, embeddings, lambda_ = 0.5, k = 10))]
+fn mmr_py(
+    py: Python<'_>,
+    candidates: Vec<(String, f32)>,
+    embeddings: Vec<Vec<f32>>,
+    lambda_: f32,
+    k: usize,
+) -> PyResult<Py<PyList>> {
+    let config = rerank::DiversityMmrConfig::new(lambda_, k);
+    let results = rerank::diversity::mmr_cosine(&candidates, &embeddings, config);
+    let out = PyList::empty(py);
+    for (id, score) in results {
+        out.append(make_result_tuple(py, id, score)?)?;
+    }
+    Ok(out.into())
+}
+
+/// Determinantal Point Process diversity selection.
+///
+/// Args:
+///     candidates: List of (id, score) pairs.
+///     embeddings: List of embedding vectors (one per candidate, same order).
+///     k: Number of results to select.
+///     alpha: Relevance weight (higher = more weight on relevance). Default: 1.0.
+#[allow(deprecated)]
+#[pyfunction(name = "dpp")]
+#[pyo3(signature = (candidates, embeddings, k = 10, alpha = 1.0))]
+fn dpp_py(
+    py: Python<'_>,
+    candidates: Vec<(String, f32)>,
+    embeddings: Vec<Vec<f32>>,
+    k: usize,
+    alpha: f32,
+) -> PyResult<Py<PyList>> {
+    let config = rerank::DppConfig::new(k, alpha);
+    let results = rerank::dpp(&candidates, &embeddings, config);
+    let out = PyList::empty(py);
+    for (id, score) in results {
+        out.append(make_result_tuple(py, id, score)?)?;
+    }
+    Ok(out.into())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reranking: Matryoshka refinement
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Refine candidates using Matryoshka (nested) embeddings.
+///
+/// Uses tail dimensions (beyond head_dims) to re-score candidates
+/// that were initially retrieved using head dimensions only.
+///
+/// Args:
+///     candidates: List of (id, score) from first-stage retrieval.
+///     query: Full query embedding vector.
+///     docs: List of (id, full_embedding) for candidates.
+///     head_dims: Number of head dimensions used in first-stage retrieval.
+///     alpha: Blending weight (0.0 = tail only, 1.0 = original only). Default: 0.5.
+#[allow(deprecated)]
+#[pyfunction(name = "matryoshka_refine")]
+#[pyo3(signature = (candidates, query, docs, head_dims, alpha = 0.5))]
+fn matryoshka_refine_py(
+    py: Python<'_>,
+    candidates: Vec<(String, f32)>,
+    query: Vec<f32>,
+    docs: Vec<(String, Vec<f32>)>,
+    head_dims: usize,
+    alpha: f32,
+) -> PyResult<Py<PyList>> {
+    let results =
+        rerank::matryoshka::refine_with_alpha(&candidates, &query, &docs, head_dims, alpha)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let out = PyList::empty(py);
+    for (id, score) in results {
+        out.append(make_result_tuple(py, id, score)?)?;
+    }
+    Ok(out.into())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reranking: Utilities
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Normalize scores to [0, 1] range.
+#[pyfunction(name = "normalize_scores")]
+fn normalize_scores_py(scores: Vec<f32>) -> Vec<f32> {
+    rerank::scoring::normalize_scores(&scores)
 }
