@@ -70,23 +70,8 @@ jobs:
           name: wheel-windows-x64
           path: rankops-python/dist/*.whl
 
-  sdist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-          working-directory: rankops-python
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: rankops-python/dist/*.tar.gz
-
   publish:
-    needs: [linux, macos, windows, sdist]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
