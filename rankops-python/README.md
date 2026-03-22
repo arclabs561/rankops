@@ -4,6 +4,10 @@ Python bindings for **rankops** (Rust) -- fusion and reranking for hybrid search
 
 ## Installation
 
+```bash
+pip install rankops
+```
+
 ### From source
 
 ```bash
@@ -164,7 +168,7 @@ dense = [("doc_2", 0.92), ("doc_3", 0.88)]
 # Get results with full provenance
 explained = rankops.rrf_explain(
     [bm25, dense],
-    [rankops.RetrieverIdPy("bm25"), rankops.RetrieverIdPy("dense")],
+    ["bm25", "dense"],
     k=60
 )
 
