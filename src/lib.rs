@@ -56,6 +56,8 @@ use std::hash::Hash;
 pub mod adapt;
 /// Fusion diagnostics: complementarity, overlap, score distributions.
 pub mod diagnostics;
+/// Differentiable top-k selection via smooth semiring DP.
+pub mod dp_topk;
 /// Composable fusion pipeline and multi-query fusion.
 pub mod pipeline;
 /// Reranking: MaxSim/ColBERT, MMR/DPP diversity, Matryoshka, scoring, quantization.
