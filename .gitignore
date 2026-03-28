@@ -4,3 +4,4 @@ target/
 Cargo 2.toml
 rankops-python/Cargo.lock.fastembed_cache/
 .fastembed_cache/
+proptest-regressions/
