@@ -4,14 +4,7 @@
 [![Documentation](https://docs.rs/rankops/badge.svg)](https://docs.rs/rankops)
 [![CI](https://github.com/arclabs561/rankops/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/rankops/actions/workflows/ci.yml)
 
-Operations on ranked lists: fuse multiple retrievers, then rerank. Pairs with [**rankfns**](https://crates.io/crates/rankfns) (scoring kernels).
-
-`rankops` covers the post-retrieval pipeline:
-
-- **Fusion** -- combine ranked lists from heterogeneous retrievers (BM25, dense, sparse)
-- **Reranking** -- MaxSim/ColBERT late interaction, MMR/DPP diversity, Matryoshka two-stage
-- **Evaluation** -- NDCG, MAP, MRR, Precision@k, recall@k, Hit Rate, fusion parameter optimization
-- **Diagnostics** -- complementarity analysis, score distribution stats, fusion recommendations
+Rank fusion and reranking.
 
 ## Quickstart
 
