@@ -55,6 +55,10 @@ let result = method.fuse(&bm25, &dense);
 
 ### Diversity reranking (requires `rerank` feature, on by default)
 
+MMR selects the next document by balancing relevance against redundancy:
+
+$$\text{MMR} = \arg\max_{d_i \in R \setminus S}\left[\lambda \cdot \text{rel}(d_i) - (1-\lambda) \cdot \max_{d_j \in S} \text{sim}(d_i, d_j)\right]$$
+
 ```rust
 use rankops::rerank::diversity::{mmr, MmrConfig};
 
@@ -74,14 +78,14 @@ let selected = mmr(&candidates, &similarity, config);
 
 | Function | Uses scores | Description |
 |----------|:-----------:|-------------|
-| `rrf` | No | Reciprocal Rank Fusion -- rank-based, works across incompatible scales |
-| `isr` | No | Inverse Square Root fusion -- gentler rank decay than RRF |
-| `borda` | No | Borda count -- (N - rank) voting points |
+| `rrf` | No | Reciprocal Rank Fusion: $\text{score}(d) = \sum_i \frac{1}{k + \text{rank}_i(d)}$ |
+| `isr` | No | Inverse Square Root: $\sum_i \frac{1}{\sqrt{\text{rank}_i(d)}}$ |
+| `borda` | No | Borda count: $\sum_i (N - \text{rank}_i(d))$ |
 | `condorcet` | No | Pairwise Condorcet voting -- outlier-robust |
 | `copeland` | No | Copeland voting -- net pairwise wins, more discriminative than Condorcet |
 | `median_rank` | No | Median rank across lists -- outlier-robust aggregation |
-| `combsum` | Yes | Sum of min-max normalized scores |
-| `combmnz` | Yes | CombSUM * overlap count -- rewards multi-list presence |
+| `combsum` | Yes | $\sum_i \hat{s}_i(d)$ (min-max normalized) |
+| `combmnz` | Yes | $\lvert\{i : d \in L_i\}\rvert \cdot \sum_i \hat{s}_i(d)$ |
 | `combmax` | Yes | Max score across lists |
 | `combmin` | Yes | Min score -- conservative, requires all retrievers to agree |
 | `combmed` | Yes | Median score -- robust to outliers |
@@ -109,11 +113,11 @@ Score normalization for cross-retriever fusion via `Normalization` enum:
 
 | Function | Description |
 |----------|-------------|
-| `ndcg_at_k` | Normalized Discounted Cumulative Gain (BEIR default) |
-| `map` / `map_at_k` | Mean Average Precision (MTEB Reranking default) |
-| `mrr` | Mean Reciprocal Rank |
-| `precision_at_k` | Fraction of top-k that are relevant |
-| `recall_at_k` | Fraction of relevant docs in top-k |
+| `ndcg_at_k` | $\text{DCG}@k / \text{IDCG}@k$ where $\text{DCG} = \sum_{i=1}^{k} \frac{\text{rel}_i}{\log_2(i+1)}$ |
+| `map` / `map_at_k` | $\frac{1}{\lvert R \rvert}\sum_{k=1}^{n} P(k) \cdot \text{rel}(k)$ |
+| `mrr` | $\frac{1}{\lvert Q \rvert}\sum_{q} \frac{1}{\text{rank}_q}$ (first relevant result) |
+| `precision_at_k` | $\frac{\lvert\\{\text{relevant}\\} \cap \text{top-}k\rvert}{k}$ |
+| `recall_at_k` | $\frac{\lvert\\{\text{relevant}\\} \cap \text{top-}k\rvert}{\lvert\\{\text{relevant}\\}\rvert}$ |
 | `hit_rate` | Binary: any relevant doc in top-k? |
 | `evaluate_metric` | Dispatch by `OptimizeMetric` enum |
 | `optimize_fusion` | Grid search over fusion parameters |
