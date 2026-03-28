@@ -2,7 +2,7 @@
 # https://github.com/repository-settings/app
 
 repository:
-  description: "Operations on ranked lists: fusion (RRF, CombMNZ, Borda, DBSF), reranking (MaxSim/ColBERT, MMR, DPP, Matryoshka). Pairs with rankfns (scoring kernels)."
+  description: "Rank fusion and reranking"
   homepage: "https://docs.rs/rankops"
   private: false
   has_issues: true
