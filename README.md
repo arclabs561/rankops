@@ -113,7 +113,7 @@ Score normalization for cross-retriever fusion via `Normalization` enum:
 
 | Function | Description |
 |----------|-------------|
-| `ndcg_at_k` | $\text{DCG}@k / \text{IDCG}@k$ where $\text{DCG} = \sum_{i=1}^{k} \frac{\text{rel}_i}{\log_2(i+1)}$ |
+| `ndcg_at_k` | $\text{DCG}@k / \text{IDCG}@k$ where $\text{DCG} = \sum_{i=1}^{k} \frac{\text{rel}\_{i}}{\log\_{2}(i+1)}$ |
 | `map` / `map_at_k` | $\frac{1}{\lvert R \rvert}\sum_{k=1}^{n} P(k) \cdot \text{rel}(k)$ |
 | `mrr` | $\frac{1}{\lvert Q \rvert}\sum_{q} \frac{1}{\text{rank}_q}$ (first relevant result) |
 | `precision_at_k` | $\frac{\lvert\\{\text{relevant}\\} \cap \text{top-}k\rvert}{k}$ |
