@@ -471,7 +471,11 @@ mod tests {
         // Can only fit 1 item (weight 5 each). Best is item 0 (score=10).
         let sel = dp_knapsack(&scores, &weights, capacity, 0.01);
         assert!(sel[0] > 0.9, "best item should be selected, got {}", sel[0]);
-        assert!(sel[2] < 0.1, "worst item should not be selected, got {}", sel[2]);
+        assert!(
+            sel[2] < 0.1,
+            "worst item should not be selected, got {}",
+            sel[2]
+        );
     }
 
     #[test]
