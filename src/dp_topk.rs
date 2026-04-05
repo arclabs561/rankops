@@ -264,9 +264,9 @@ pub fn dp_knapsack(
     // Optimal value: best over all capacities used.
     let opt = {
         let mut vals = Vec::with_capacity(capacity + 1);
-        for c in 0..=capacity {
-            if v[n][c] > f32::NEG_INFINITY {
-                vals.push(v[n][c]);
+        for val in &v[n][..=capacity] {
+            if *val > f32::NEG_INFINITY {
+                vals.push(*val);
             }
         }
         if vals.is_empty() {
@@ -278,8 +278,8 @@ pub fn dp_knapsack(
     // Backward DP: w_back[i][c] = smooth-max of completing the knapsack using items i..n
     // with remaining capacity = capacity - c.
     let mut w_back = vec![vec![f32::NEG_INFINITY; capacity + 1]; n + 1];
-    for c in 0..=capacity {
-        w_back[n][c] = 0.0;
+    for val in w_back[n].iter_mut().take(capacity + 1) {
+        *val = 0.0;
     }
 
     for i in (1..=n).rev() {
@@ -357,7 +357,7 @@ mod tests {
         let scores = vec![3.0, 1.0, 4.0, 1.5, 9.0, 2.6];
         let sel = dp_topk(&scores, 3, 0.5);
         for (i, &v) in sel.iter().enumerate() {
-            assert!(v >= 0.0 && v <= 1.0, "sel[{i}] = {v} out of [0, 1]");
+            assert!((0.0..=1.0).contains(&v), "sel[{i}] = {v} out of [0, 1]");
         }
     }
 
@@ -484,7 +484,10 @@ mod tests {
         let weights = vec![2, 1, 3, 1];
         let sel = dp_knapsack(&scores, &weights, 4, 0.5);
         for (i, &v) in sel.iter().enumerate() {
-            assert!(v >= 0.0 && v <= 1.0 + 1e-6, "sel[{i}] = {v} out of [0, 1]");
+            assert!(
+                (0.0..=1.0 + 1e-6).contains(&v),
+                "sel[{i}] = {v} out of [0, 1]"
+            );
         }
     }
 
