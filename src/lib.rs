@@ -4048,7 +4048,7 @@ mod tests {
         let b = ranked(&["d2", "d3", "d4"]);
         let f = rrf(&a, &b);
 
-        assert!(f.iter().position(|(id, _)| *id == "d2").unwrap() < 2);
+        assert_eq!(f.iter().position(|(id, _)| *id == "d2").unwrap(), 0);
     }
 
     #[test]
@@ -4179,8 +4179,8 @@ mod tests {
         let b = ranked(&["d2", "d3", "d4"]);
         let f = isr(&a, &b);
 
-        // d2 appears in both lists, should rank high
-        assert!(f.iter().position(|(id, _)| *id == "d2").unwrap() < 2);
+        // d2 appears in both lists, should rank at the top
+        assert_eq!(f.iter().position(|(id, _)| *id == "d2").unwrap(), 0);
     }
 
     #[test]
@@ -4450,11 +4450,19 @@ mod tests {
         let a = vec![("d1", f32::NAN), ("d2", 0.5)];
         let b = vec![("d2", 0.9), ("d3", 0.1)];
 
-        // Should not panic
-        let _ = rrf(&a, &b);
-        let _ = combsum(&a, &b);
-        let _ = combmnz(&a, &b);
-        let _ = borda(&a, &b);
+        // Should not panic and should return non-empty results
+        let r = rrf(&a, &b);
+        assert!(!r.is_empty());
+        assert!(r.iter().all(|(_, s)| s.is_finite()));
+
+        let r = combsum(&a, &b);
+        assert!(!r.is_empty());
+
+        let r = combmnz(&a, &b);
+        assert!(!r.is_empty());
+
+        let r = borda(&a, &b);
+        assert!(!r.is_empty());
     }
 
     #[test]
@@ -4462,9 +4470,13 @@ mod tests {
         let a = vec![("d1", f32::INFINITY), ("d2", 0.5)];
         let b = vec![("d2", f32::NEG_INFINITY), ("d3", 0.1)];
 
-        // Should not panic
-        let _ = rrf(&a, &b);
-        let _ = combsum(&a, &b);
+        // Should not panic and should return non-empty results
+        let r = rrf(&a, &b);
+        assert!(!r.is_empty());
+        assert!(r.iter().all(|(_, s)| s.is_finite()));
+
+        let r = combsum(&a, &b);
+        assert!(!r.is_empty());
     }
 
     #[test]
@@ -4821,20 +4833,26 @@ mod tests {
         let config = MmrConfig::new(0.0).with_top_k(2);
         let results = mmr(&candidates, similarity, config);
 
-        // First selection: any (all equal relevance, no penalty yet)
-        // Second selection: should pick the most different from first
-        // If d1 was first, d3 should be second (not d2 which is similar to d1)
-        if results[0].0 == "d1" || results[0].0 == "d2" {
-            assert_eq!(results[1].0, "d3", "should pick diverse document second");
-        }
+        // All three docs should be present (top_k=2 returns 2 results)
+        assert_eq!(results.len(), 2);
+        // d3 must appear: it is the most diverse from both d1 and d2 (sim=0.1 vs 0.9 between d1/d2)
+        // Under lambda=0.0, the second pick always goes to the most diverse from the selected set.
+        // Regardless of which doc was picked first (d1 or d2), d3 must be in the result set.
+        let ids: Vec<&str> = results.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&"d3"), "d3 must appear: it is most diverse from d1 and d2");
     }
 
     #[test]
     fn mmr_config_lambda_bounds() {
-        // Valid lambda values
-        let _ = MmrConfig::new(0.0);
-        let _ = MmrConfig::new(0.5);
-        let _ = MmrConfig::new(1.0);
+        // Valid lambda values stored correctly
+        let c = MmrConfig::new(0.0);
+        assert_eq!(c.lambda, 0.0);
+
+        let c = MmrConfig::new(0.5);
+        assert_eq!(c.lambda, 0.5);
+
+        let c = MmrConfig::new(1.0);
+        assert_eq!(c.lambda, 1.0);
     }
 
     #[test]
@@ -5155,6 +5173,28 @@ mod tests {
     fn make_qrels() -> Qrels<&'static str> {
         // d1=highly relevant, d2=relevant, d3=relevant, d4/d5=not relevant
         HashMap::from([("d1", 2), ("d2", 1), ("d3", 1)])
+    }
+
+    #[test]
+    fn ndcg_at_k_formula() {
+        // Hand-computed NDCG with graded relevance using 2^rel-1 gain formula.
+        //
+        // Ranking:  doc1(rel=2), doc2(rel=0), doc3(rel=1)
+        // Ideal:    doc1(rel=2), doc3(rel=1), doc2(rel=0)
+        //
+        // DCG  = (2^2-1)/log2(2) + (2^0-1)/log2(3) + (2^1-1)/log2(4)
+        //      = 3/1 + 0 + 1/2 = 3.5
+        // IDCG = (2^2-1)/log2(2) + (2^1-1)/log2(3) + (2^0-1)/log2(4)
+        //      = 3/1 + 1/1.58496 + 0 ≈ 3.0 + 0.63093 = 3.63093
+        // NDCG = 3.5 / 3.63093 ≈ 0.96394
+        let qrels: Qrels<&str> = HashMap::from([("doc1", 2u32), ("doc2", 0u32), ("doc3", 1u32)]);
+        let results = vec![("doc1", 0.9_f32), ("doc2", 0.5), ("doc3", 0.1)];
+        let ndcg = ndcg_at_k(&results, &qrels, 3);
+        let expected = 3.5_f32 / (3.0 + 1.0_f32 / 3.0_f32.log2());
+        assert!(
+            (ndcg - expected).abs() < 1e-4,
+            "NDCG={ndcg} expected≈{expected}"
+        );
     }
 
     #[test]
