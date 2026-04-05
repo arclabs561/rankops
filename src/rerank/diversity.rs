@@ -983,7 +983,7 @@ mod proptests {
                 prop_assert_eq!(second_id, 2u32, "doc2 should be second pick under pure diversity");
                 // Score must be in [0, 1] -- only possible with subtraction, not division
                 let second_score = result[1].1;
-                prop_assert!(second_score >= 0.0 && second_score <= 1.0,
+                prop_assert!((0.0..=1.0).contains(&second_score),
                     "diversity score {second_score} out of [0,1]; division would exceed 1.0");
             }
         }
