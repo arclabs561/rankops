@@ -4839,7 +4839,10 @@ mod tests {
         // Under lambda=0.0, the second pick always goes to the most diverse from the selected set.
         // Regardless of which doc was picked first (d1 or d2), d3 must be in the result set.
         let ids: Vec<&str> = results.iter().map(|(id, _)| *id).collect();
-        assert!(ids.contains(&"d3"), "d3 must appear: it is most diverse from d1 and d2");
+        assert!(
+            ids.contains(&"d3"),
+            "d3 must appear: it is most diverse from d1 and d2"
+        );
     }
 
     #[test]
