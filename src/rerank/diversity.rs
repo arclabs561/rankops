@@ -942,30 +942,50 @@ mod proptests {
             prop_assert!(result.len() <= k.min(n));
         }
 
-        /// MMR diversity calculation uses subtraction (1.0 - max_sim), not division
+        /// MMR diversity calculation uses subtraction (1.0 - max_sim), not division.
+        /// With lambda=0.0 (pure diversity) and a 3-doc case where doc0 and doc1 are
+        /// very similar (sim=0.9) and doc2 is dissimilar from both (sim=0.1), the
+        /// second pick must be doc2 regardless of which was picked first.
+        ///
+        /// Under subtraction: diversity(doc2) = 1 - 0.1 = 0.9 (preferred)
+        /// Under division:    diversity(doc2) = 1 / 0.1 = 10  (would also prefer doc2, but
+        ///                    additionally yields diversity > 1 which is out of [0,1] range)
+        ///
+        /// We verify two things: (1) results are non-empty and unique, (2) the score of
+        /// the second-selected doc, when computable from the returned score value, is
+        /// consistent with subtraction semantics (≤ 1.0) rather than division (> 1.0).
         #[test]
-        fn mmr_diversity_uses_subtraction(n in 2usize..8, k in 1usize..5) {
-            let candidates: Vec<(u32, f32)> = (0..n as u32)
-                .map(|i| (i, 1.0 - i as f32 * 0.1))
-                .collect();
-            // Create similarity matrix where items are similar (high sim = low diversity)
+        fn mmr_diversity_uses_subtraction(k in 1usize..3usize) {
+            // Fixed 3-doc case: doc0 and doc1 very similar, doc2 dissimilar
+            let candidates: Vec<(u32, f32)> = vec![(0, 0.9), (1, 0.9), (2, 0.9)];
+            let n = 3;
             let mut sim: Vec<f32> = vec![0.0; n * n];
             for i in 0..n {
                 for j in 0..n {
                     if i == j {
-                        sim[i * n + j] = 1.0; // Self-similarity
+                        sim[i * n + j] = 1.0;
+                    } else if (i == 0 && j == 1) || (i == 1 && j == 0) {
+                        sim[i * n + j] = 0.9; // doc0 and doc1 are similar
                     } else {
-                        sim[i * n + j] = 0.8; // High similarity = low diversity
+                        sim[i * n + j] = 0.1; // doc2 is dissimilar from both
                     }
                 }
             }
-            let result = mmr(&candidates, &sim, MmrConfig::new(0.5, k));
-            // With high similarity, diversity should be low (1.0 - 0.8 = 0.2)
-            // If it used division (1.0 / max_sim), diversity would be ~1.25, which is wrong
-            // The result should reflect that high similarity reduces diversity
+            let result = mmr(&candidates, &sim, MmrConfig::new(0.0, k));
             prop_assert!(!result.is_empty(), "MMR should return results");
-            // If diversity calculation was wrong (division instead of subtraction),
-            // the selection would be different
+            // All returned IDs must be unique
+            let ids: std::collections::HashSet<u32> = result.iter().map(|(id, _)| *id).collect();
+            prop_assert_eq!(ids.len(), result.len(), "no duplicate IDs");
+            if k >= 2 {
+                // Second pick must be doc2 (id=2): most diverse from any first pick.
+                // doc0 or doc1 will be first; doc2 must be second.
+                let second_id = result[1].0;
+                prop_assert_eq!(second_id, 2u32, "doc2 should be second pick under pure diversity");
+                // Score must be in [0, 1] -- only possible with subtraction, not division
+                let second_score = result[1].1;
+                prop_assert!(second_score >= 0.0 && second_score <= 1.0,
+                    "diversity score {second_score} out of [0,1]; division would exceed 1.0");
+            }
         }
 
         /// MMR returns unique IDs (no duplicates)
