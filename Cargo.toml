@@ -9,6 +9,8 @@ readme = "README.md"
 keywords = ["rerank", "rrf", "retrieval", "rankops", "fusion"]
 categories = ["algorithms", "mathematics", "science"]
 
+[workspace]
+
 [dependencies]
 serde = { version = "1.0", optional = true, features = ["derive"] }
 # SIMD primitives for reranking (MaxSim/ColBERT)
