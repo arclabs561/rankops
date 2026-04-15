@@ -10,3 +10,4 @@ proptest-regressions/
 .cursor/
 .cursorrules
 .cursorignore
+Cargo.lock
