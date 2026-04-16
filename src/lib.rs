@@ -58,6 +58,8 @@ pub mod adapt;
 pub mod diagnostics;
 /// Differentiable top-k selection via smooth semiring DP.
 pub mod dp_topk;
+/// Ranking evaluation metrics: MRR, NDCG, Hits@k, Precision@k, Recall@k, and more.
+pub mod metrics;
 /// Composable fusion pipeline and multi-query fusion.
 pub mod pipeline;
 /// Reranking: MaxSim/ColBERT, MMR/DPP diversity, Matryoshka, scoring, quantization.
