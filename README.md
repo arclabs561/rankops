@@ -10,7 +10,7 @@ Rank fusion and reranking.
 
 ```toml
 [dependencies]
-rankops = "0.1.4"
+rankops = "0.1.6"
 ```
 
 ### Fusion
