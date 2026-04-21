@@ -11,3 +11,5 @@ proptest-regressions/
 .cursorrules
 .cursorignore
 Cargo.lock
+
+.claude/settings.local.json
