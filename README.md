@@ -4,7 +4,9 @@
 [![Documentation](https://docs.rs/rankops/badge.svg)](https://docs.rs/rankops)
 [![CI](https://github.com/arclabs561/rankops/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/rankops/actions/workflows/ci.yml)
 
-Rank fusion and reranking.
+Operations on ranked lists in Rust: 14 fusion methods (RRF, Copeland,
+CombMNZ, DBSF, ...), rerankers (MaxSim/ColBERT, MMR, DPP), and IR
+evaluation metrics (NDCG, MAP, MRR).
 
 ## Quickstart
 
