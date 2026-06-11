@@ -13,3 +13,4 @@ proptest-regressions/
 Cargo.lock
 
 .claude/settings.local.json
+/semver-checks/
