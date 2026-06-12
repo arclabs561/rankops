@@ -109,7 +109,7 @@ pub fn from_inner_product<I: Clone + Eq + Hash>(results: &[(I, f32)]) -> Vec<(I,
 /// let ranked = from_logits(&reranker_output);
 /// // d1 (highest logit) ranks first; scores are in (0, 1)
 /// assert!(ranked[0].1 > 0.9);
-/// assert!((ranked[2].1 - 0.5).abs() < 0.01); // sigmoid(0) = 0.5
+/// assert!((ranked[1].1 - 0.5).abs() < 0.01); // sigmoid(0) = 0.5 sorts second
 /// ```
 pub fn from_logits<I: Clone + Eq + Hash>(results: &[(I, f32)]) -> Vec<(I, f32)> {
     let mut scored: Vec<(I, f32)> = results
