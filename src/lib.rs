@@ -3639,22 +3639,17 @@ pub fn mmr_embeddings<I: Clone + Eq + Hash>(
     mmr(&id_scores, similarity, config)
 }
 
-/// Cosine similarity between two vectors.
+/// Cosine similarity between two vectors, via the rerank simd module
+/// (innr-backed when the `rerank`/`innr` feature is on, local fallback
+/// otherwise). The length guard stays here: the simd cosine asserts equal
+/// lengths, and callers feed ragged embedding maps. Near-zero norms return
+/// 0.0 in both backends.
 #[inline]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-    if norm_a < 1e-10 || norm_b < 1e-10 {
-        return 0.0;
-    }
-
-    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+    crate::rerank::simd::cosine(a, b).clamp(-1.0, 1.0)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
