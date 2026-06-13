@@ -77,6 +77,17 @@ let selected = mmr(&candidates, &similarity, config);
 
 Standard IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, `hit_rate`. Plus `optimize_fusion` for grid search over fusion parameters.
 
+The `trec` module reads TREC-format qrels and run files and reports collection-level mean metrics over all judged queries (the BEIR / `trec_eval` / ranx number):
+
+```rust
+use rankops::trec::{parse_qrels, parse_run, evaluate};
+use std::fs::File;
+
+let qrels = parse_qrels(File::open("qrels.txt")?)?;
+let run = parse_run(File::open("run.txt")?)?;
+let summary = evaluate(&run, &qrels, 10); // mean nDCG@10, MAP, MRR, recall, precision
+```
+
 ## Diagnostics
 
 The `diagnostics` module (`diagnose`, `overlap_ratio`, `complementarity`, `rank_correlation`) helps decide whether fusion is beneficial, based on Louis et al., "Know When to Fuse" (2024).
@@ -114,6 +125,7 @@ ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage rerank
 cargo run --example fusion            # All fusion methods side-by-side
 cargo run --example hybrid_search     # End-to-end: BM25 + dense -> fuse -> rerank -> eval
 cargo run --example evaluate          # Metrics, diagnostics, pipeline, method comparison
+cargo run --example trec_eval         # Parse TREC qrels/run files, collection-level metrics
 cargo run --example rerank_maxsim     # ColBERT MaxSim scoring
 cargo run --example diversity         # MMR and DPP diversity reranking
 ```
