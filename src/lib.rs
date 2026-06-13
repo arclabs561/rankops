@@ -64,6 +64,8 @@ pub mod metrics;
 pub mod pipeline;
 /// Reranking: MaxSim/ColBERT, MMR/DPP diversity, Matryoshka, scoring, quantization.
 pub mod rerank;
+/// TREC qrels/run file parsing and collection-level (multi-query) evaluation.
+pub mod trec;
 /// Validation utilities for fusion results.
 pub mod validate;
 
