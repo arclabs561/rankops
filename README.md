@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/rankops/badge.svg)](https://docs.rs/rankops)
 [![CI](https://github.com/arclabs561/rankops/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/rankops/actions/workflows/ci.yml)
 
-Operations on ranked lists: 14 fusion methods (RRF, Copeland,
+Operations on ranked lists: 15 fusion methods (RRF, Copeland,
 CombMNZ, DBSF, ...), rerankers (MaxSim/ColBERT, MMR, DPP), and IR
 evaluation metrics (NDCG, MAP, MRR).
 
@@ -12,7 +12,7 @@ evaluation metrics (NDCG, MAP, MRR).
 
 ```toml
 [dependencies]
-rankops = "0.1.6"
+rankops = "0.1.9"
 ```
 
 ### Fusion
