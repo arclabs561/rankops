@@ -12,7 +12,7 @@ evaluation metrics (NDCG, MAP, MRR).
 
 ```toml
 [dependencies]
-rankops = "0.1.9"
+rankops = "0.1.10"
 ```
 
 ### Fusion
@@ -120,6 +120,8 @@ Also: `compare()` for method comparison, `fuse_multi_query()` for the N-queries 
 ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage reranking, and int8 quantization for token embeddings. On by default; also available: `hierarchical` (ColBERT clustering) and `serde`.
 
 ## Examples
+
+See [examples/README.md](examples/README.md) for the recommended path through the examples.
 
 ```sh
 cargo run --example fusion            # All fusion methods side-by-side
