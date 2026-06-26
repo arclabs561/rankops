@@ -1,8 +1,16 @@
 //! Differentiable top-k selection via dynamic programming on a smooth semiring.
 //!
 //! Casts top-k as a DP where the hard max/add operations are replaced with
-//! log-sum-exp smooth approximations. As temperature approaches 0, the output
-//! converges to hard top-k selection.
+//! log-sum-exp smooth approximations. Lowering the temperature sharpens the
+//! selection toward hard top-k.
+//!
+//! Numerical floor (f32): the per-item marginal is `exp((log_pick - opt)/t)`,
+//! whose `log_pick - opt` cancellation error is amplified by `1/t`. Below
+//! roughly `t = 1e-2` the f32 error dominates and the selection degrades (the
+//! sum drifts below `k` and top items can collapse toward 0), so this does NOT
+//! converge to hard top-k as `t -> 0` in f32. Use `t` in roughly `[1e-2, 1.0]`.
+//! Computing the DP/marginal internally in f64 would extend the usable range;
+//! see `examples/dp_topk_validation.rs` for the conservation check.
 //!
 //! Reference: Vivier-Ardisson, Sander, Parmentier, Blondel 2026
 //! "Differentiable Knapsack and Top-k Operators"
