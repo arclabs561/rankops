@@ -14,11 +14,13 @@
 //! - [`scoring`](crate::rerank::scoring) — Dense, MaxSim, and CrossEncoder traits
 //! - [`matryoshka`](crate::rerank::matryoshka) — two-stage retrieval with nested embeddings
 //! - [`diversity`](crate::rerank::diversity) — DPP diversity reranking
+//! - [`fde`](crate::rerank::fde) — fixed-dimensional encodings for late interaction
 
 pub mod colbert;
 pub mod diversity;
 pub mod embedding;
 pub mod explain;
+pub mod fde;
 pub mod matryoshka;
 pub mod quantization;
 pub mod scoring;
@@ -26,6 +28,7 @@ pub mod simd;
 
 pub use colbert::{rank as maxsim_rank, refine as maxsim_refine};
 pub use diversity::{dpp, mmr as diversity_mmr, DppConfig, MmrConfig as DiversityMmrConfig};
+pub use fde::{FdeConfig, FixedDimEncoding};
 pub use matryoshka::refine as matryoshka_refine;
 pub use quantization::{dequantize_int8, quantize_int8, QuantizationError};
 pub use scoring::{Scorer, TokenScorer};
@@ -61,6 +64,11 @@ pub enum RerankError {
         /// Invalid window size value.
         window_size: usize,
     },
+    /// Fixed-dimensional encoding configuration is invalid.
+    InvalidFdeConfig {
+        /// Reason the configuration is invalid.
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for RerankError {
@@ -81,6 +89,9 @@ impl std::fmt::Display for RerankError {
             }
             Self::InvalidWindowSize { window_size } => {
                 write!(f, "window_size must be >= 1, got {window_size}")
+            }
+            Self::InvalidFdeConfig { reason } => {
+                write!(f, "invalid fixed-dimensional encoding config: {reason}")
             }
         }
     }

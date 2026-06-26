@@ -12,6 +12,7 @@ These examples show the main post-retrieval decisions: fuse, diagnose, rerank, a
 | Compare metric and diagnostic APIs | `cargo run --release --example evaluate` | Fusion diagnostics and metric tables show when fusion helps and when normalization matters. |
 | Diversify near-duplicate results | `cargo run --release --example diversity` | MMR and DPP trade some relevance for topic coverage. |
 | Score late-interaction candidates | `cargo run --release --example rerank_maxsim` | MaxSim ranks token-level document matches and prints token alignments. |
+| Approximate late-interaction candidates | `cargo run --release --example rerank_fde` | A fixed-dimensional proxy shortlists candidates before exact MaxSim. |
 | Select a multi-objective frontier | `cargo run --release --example pareto_rerank --features pareto` | Pareto selection keeps non-dominated relevance/recency tradeoffs. |
 
 ## Fusion and evaluation
@@ -25,6 +26,7 @@ These examples show the main post-retrieval decisions: fuse, diagnose, rerank, a
 
 - `diversity.rs` shows MMR and DPP on a result set with near-duplicate Python async documents.
 - `rerank_maxsim.rs` shows ColBERT-style MaxSim scoring and token alignments on inline token embeddings.
+- `rerank_fde.rs` shows fixed-dimensional proxy scoring for late-interaction candidate generation.
 - `pareto_rerank.rs` needs the `pareto` feature and shows how recency can be added as a second objective after fusion.
 
 ## Checks
