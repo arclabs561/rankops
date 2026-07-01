@@ -134,8 +134,8 @@ impl LateInteractionScorer {
     ///
     /// Formula: `score = Σᵢ wᵢ × maxⱼ(Qᵢ · Dⱼ)`
     ///
-    /// Weights allow prioritizing important query tokens (e.g., by IDF).
-    /// Research shows ~2-5% quality improvement with learned weights.
+    /// Weights scale each query token before summing `MaxSim`. Use them when
+    /// per-query-token importance scores, such as IDF weights, are available.
     ///
     /// See [arXiv:2511.16106](https://arxiv.org/abs/2511.16106) for details.
     ///
@@ -290,7 +290,7 @@ pub fn normalize_scores(scores: &[f32]) -> Vec<f32> {
 /// Token embedding compression (indexing-time only).
 ///
 /// Pooling reduces storage by clustering semantically similar tokens.
-/// This is a **lossy** operation—some token-level information is lost.
+/// This is a **lossy** operation: some token-level information is lost.
 ///
 /// ## Mathematical Properties
 ///
@@ -305,18 +305,18 @@ pub fn normalize_scores(scores: &[f32]) -> Vec<f32> {
 /// 3. `pool(tokens, tokens.len()) == tokens` — target >= count is identity
 /// 4. Each output vector has same dimension as input vectors
 ///
-/// ## Quality vs Speed
+/// ## Method Guide
 ///
-/// Research-backed performance characteristics (Clavie et al., 2024):
+/// Based on the token-pooling evaluation in Clavie et al. (2024):
 ///
 /// | Method | Quality | Speed | Best For | Research Finding |
 /// |--------|---------|-------|----------|-------------------|
-/// | Ward clustering | High | O(n² log n) | Aggressive compression (factor 4+) | Best quality at high compression |
+/// | Ward clustering | High | O(n² log n) | Aggressive compression (factor 4+) | Evaluated for high compression |
 /// | Greedy clustering | Good | O(n³) | Moderate compression (factor 2-3) | Near-optimal for factor 2-3 |
 /// | Sequential | Low | O(n) | Speed-critical | Fast but quality degrades faster |
 ///
-/// **Recommendation**: Use greedy clustering for factors 2-3 (default), Ward's
-/// method for factor 4+ (enable `hierarchical` feature).
+/// Greedy clustering is the default. Enable the `hierarchical` feature to use
+/// Ward clustering where the caller wants that method.
 pub trait Pooler {
     /// Pool to approximately `target_count` vectors.
     fn pool(&self, tokens: &[Vec<f32>], target_count: usize) -> Vec<Vec<f32>>;

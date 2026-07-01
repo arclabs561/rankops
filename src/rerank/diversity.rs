@@ -1,7 +1,6 @@
 //! Diversity-aware reranking algorithms.
 //!
-//! Select results that balance relevance with diversity — maximizing coverage
-//! while minimizing redundancy.
+//! Select results that balance relevance with diversity.
 //!
 //! # Algorithms
 //!
@@ -14,8 +13,8 @@
 //! ## MMR vs DPP
 //!
 //! - **MMR**: Penalizes max similarity to already-selected items. Simple, fast.
-//! - **DPP**: Models joint diversity via determinants. Better for small k,
-//!   captures pairwise diversity more holistically.
+//! - **DPP**: Models joint diversity via determinants. Better suited to small k
+//!   when pairwise interactions should affect the full selected set.
 //!
 //! # Lambda Parameter Guide
 //!
@@ -25,8 +24,8 @@
 //! | 0.5 | Balanced default (RAG systems) |
 //! | 0.7–0.9 | Precision search, specific intent |
 //!
-//! Research (VRSD, 2024) shows λ=0.5 is a reasonable default, but
-//! optimal value depends on candidate distribution in embedding space.
+//! The default is λ=0.5. Tune it against the candidate distribution for the
+//! retrieval task.
 //!
 //! # The Diversity Problem
 //!
