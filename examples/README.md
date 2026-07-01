@@ -5,16 +5,16 @@ and evaluate.
 
 ## Start here
 
-| I want to... | Run | What to look for |
+| I want to... | Run | Output |
 | --- | --- | --- |
-| Compare fusion methods on incompatible score scales | `cargo run --release --example fusion` | RRF and rank-based methods agree on overlap-heavy results without trusting raw scores. |
-| See a complete hybrid-search loop | `cargo run --release --example hybrid_search` | BM25, dense, and sparse results are fused, diagnosed, and scored against qrels. |
-| Check collection-level IR metrics | `cargo run --release --example trec_eval` | qrels/run parsing plus collection-level means, matching the `trec_eval`, BEIR, ranx, and pytrec_eval workflow. |
-| Compare metric and diagnostic APIs | `cargo run --release --example evaluate` | Fusion diagnostics, metric tables, normalization variants, and parameter search. |
-| Diversify near-duplicate results | `cargo run --release --example diversity` | MMR and DPP trade some relevance for topic coverage. |
-| Score late-interaction candidates | `cargo run --release --example rerank_maxsim` | MaxSim ranks token-level document matches and prints token alignments. |
-| Approximate late-interaction candidates | `cargo run --release --example rerank_fde` | A fixed-dimensional proxy shortlists candidates before exact MaxSim. |
-| Select a multi-objective frontier | `cargo run --release --example pareto_rerank --features pareto` | Pareto selection keeps non-dominated relevance/recency tradeoffs. |
+| Compare fusion methods on incompatible score scales | `cargo run --release --example fusion` | fused rankings and method scores |
+| Run a hybrid-search loop | `cargo run --release --example hybrid_search` | source rankings, fusion diagnostics, and qrels metrics |
+| Check collection-level IR metrics | `cargo run --release --example trec_eval` | parsed qrels/run files and collection-level means |
+| Compare metric and diagnostic APIs | `cargo run --release --example evaluate` | metric tables, diagnostics, normalization variants, and parameter search |
+| Diversify near-duplicate results | `cargo run --release --example diversity` | MMR and DPP selections |
+| Score late-interaction candidates | `cargo run --release --example rerank_maxsim` | MaxSim scores and token alignments |
+| Approximate late-interaction candidates | `cargo run --release --example rerank_fde` | fixed-dimensional proxy scores and exact MaxSim rerank |
+| Select a multi-objective frontier | `cargo run --release --example pareto_rerank --features pareto` | non-dominated relevance/recency candidates |
 
 ## Fusion and evaluation
 

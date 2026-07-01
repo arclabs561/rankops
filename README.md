@@ -4,9 +4,9 @@
 [![Documentation](https://docs.rs/rankops/badge.svg)](https://docs.rs/rankops)
 [![CI](https://github.com/arclabs561/rankops/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/rankops/actions/workflows/ci.yml)
 
-Operations on ranked lists: 15 fusion methods (RRF, Copeland,
-CombMNZ, DBSF, ...), rerankers (MaxSim/ColBERT, MMR, DPP), and IR
-evaluation metrics (NDCG, MAP, MRR).
+Rank fusion and reranking.
+
+Includes ranked-list fusion, reranking, and IR evaluation metrics.
 
 ## Quickstart
 

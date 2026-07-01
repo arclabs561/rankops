@@ -37,7 +37,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Minimum vector dimension for SIMD to be worthwhile.
-#[cfg(not(feature = "innr"))]
+#[cfg(all(
+    not(feature = "innr"),
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const MIN_DIM_SIMD: usize = 16;
 
 /// Threshold for treating a norm as "effectively zero" in cosine similarity.
@@ -53,7 +56,9 @@ pub use innr::{cosine, dot, maxsim, maxsim_cosine, norm};
 
 #[cfg(not(feature = "innr"))]
 mod fallback {
-    use super::{MIN_DIM_SIMD, NORM_EPSILON};
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    use super::MIN_DIM_SIMD;
+    use super::NORM_EPSILON;
 
     /// Dot product of two vectors.
     #[inline]
@@ -66,6 +71,7 @@ mod fallback {
             a.len(),
             b.len()
         );
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         let n = a.len().min(b.len());
 
         #[cfg(target_arch = "x86_64")]
