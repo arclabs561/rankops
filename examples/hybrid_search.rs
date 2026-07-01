@@ -1,14 +1,14 @@
 //! End-to-end hybrid search: BM25 + dense vector retrieval -> fusion -> rerank -> evaluate.
 //!
-//! Demonstrates how the Rust IR ecosystem crates compose:
+//! Covers:
 //! - **Scoring**: BM25 via `rankfns` kernels
 //! - **Fusion**: Combine BM25 and dense results via `rankops`
 //! - **Reranking**: Diversity selection via MMR
 //! - **Diagnostics**: Check if fusion is worthwhile
 //! - **Evaluation**: NDCG, MAP, MRR against ground truth
 //!
-//! This example uses inline data (no external deps). In production,
-//! BM25 scores come from `lexir`/`postings` and dense scores from `vicinity`.
+//! This example uses inline data. External retrievers can provide the same
+//! ranked-list input shapes.
 //!
 //! Run: `cargo run --example hybrid_search`
 
