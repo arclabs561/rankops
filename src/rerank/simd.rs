@@ -175,11 +175,11 @@ pub use fallback::{cosine, dot, maxsim, maxsim_cosine, norm};
 /// Returns for each query token: `(query_token_idx, doc_token_idx, similarity_score)`
 /// where `doc_token_idx` is the document token (or image patch) with maximum similarity to that query token.
 ///
-/// This enables highlighting, snippet extraction, and interpretability—core ColBERT features
-/// that distinguish it from single-vector embeddings.
+/// The output can be used for highlighting, snippet extraction, and per-token
+/// inspection.
 ///
 /// **Multimodal support**: For ColPali-style systems, `doc_tokens` are image patch embeddings.
-/// Alignment pairs show which image patches match each query token, enabling visual snippet extraction.
+/// Alignment pairs identify which image patches match each query token.
 ///
 /// # Returns
 ///
@@ -334,8 +334,8 @@ pub fn highlight_matches(
 ///
 /// Formula: `score(Q, D) = Σᵢ wᵢ × maxⱼ(Qᵢ · Dⱼ)`
 ///
-/// Weights allow prioritizing important query tokens (e.g., by IDF).
-/// Research shows ~2-5% quality improvement when using learned weights.
+/// Weights scale each query token before summing `MaxSim`. Use them when
+/// per-query-token importance scores, such as IDF weights, are available.
 ///
 /// See [Incorporating Token Importance in Multi-Vector Retrieval](https://arxiv.org/abs/2511.16106).
 ///
@@ -515,10 +515,10 @@ pub fn highlight_matches_vecs(
 
 /// Batch `MaxSim`: score a query against multiple documents.
 ///
-/// Returns a vector of scores, one per document. More efficient than
-/// calling `maxsim` in a loop when you have many documents.
+/// Returns a vector of scores, one per document.
 ///
-/// See [`maxsim`] for details. **Not commutative** — query must be first argument.
+/// Converts the query once, then scores each document. See [`maxsim`] for
+/// details. **Not commutative**: query must be first argument.
 ///
 /// For pre-computed document indices with ID tracking, see [`super::colbert::TokenIndex`].
 ///
@@ -565,7 +565,7 @@ pub fn maxsim_cosine_batch(query: &[Vec<f32>], docs: &[Vec<Vec<f32>>]) -> Vec<f3
 /// Returns a vector of alignment vectors, one per document. Each alignment vector
 /// contains `(query_idx, doc_idx, similarity_score)` tuples.
 ///
-/// More efficient than calling `maxsim_alignments` in a loop when you have many documents.
+/// Converts the query once, then computes alignments for each document.
 ///
 /// See [`maxsim_alignments`] for details.
 ///
@@ -619,7 +619,7 @@ pub fn maxsim_alignments_cosine_batch(
 /// Returns a vector of highlighted index vectors, one per document. Each vector contains
 /// unique document token indices that match query tokens above the threshold.
 ///
-/// More efficient than calling `highlight_matches` in a loop when you have many documents.
+/// Converts the query once, then computes highlighted matches for each document.
 ///
 /// See [`highlight_matches`] for details.
 ///

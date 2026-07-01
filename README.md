@@ -121,7 +121,7 @@ ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage rerank
 
 ## Examples
 
-See [examples/README.md](examples/README.md) for the recommended path through the examples.
+See [examples/README.md](examples/README.md) for the example list.
 
 ```sh
 cargo run --example fusion            # All fusion methods side-by-side

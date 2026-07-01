@@ -1,8 +1,8 @@
 //! Late interaction scoring via `MaxSim`.
 //!
-//! # The Architecture Spectrum
+//! # Retrieval Architectures
 //!
-//! Three architectures for neural retrieval, trading off quality vs efficiency:
+//! Three common neural retrieval architectures:
 //!
 //! | Architecture | Interaction | Complexity | Quality |
 //! |-------------|-------------|------------|---------|
@@ -10,8 +10,8 @@
 //! | **Late interaction** | Token-level MaxSim | O(m×n) scoring | Middle |
 //! | **Cross-encoder** | Full attention | O((m+n)²) | Highest |
 //!
-//! Late interaction (ColBERT) is the sweet spot: **2-4 orders of magnitude fewer
-//! FLOPs than cross-encoders** while preserving token-level granularity.
+//! Late interaction keeps token-level vectors while avoiding cross-encoder
+//! attention over the concatenated query and document.
 //!
 //! # What is Late Interaction?
 //!
@@ -23,8 +23,8 @@
 //! Late Interaction: "the quick brown fox" → [[...], [...], [...], [...]]  (4 vectors)
 //! ```
 //!
-//! **Why this matters**: A single vector must compress all semantics into one point.
-//! Token-level embeddings let "capital" and "France" match independently, then combine.
+//! A single vector compresses a document into one point. Token-level embeddings
+//! let "capital" and "France" match independently, then combine the matches.
 //!
 //! # MaxSim: The Scoring Function
 //!
@@ -56,7 +56,8 @@
 //!
 //! **Multimodal support**: For ColPali-style systems, image patches are treated as "tokens".
 //! The same `MaxSim` and alignment functions work for text-to-image retrieval:
-//! query text tokens align with image patch embeddings, enabling visual snippet extraction.
+//! query text tokens align with image patch embeddings. The alignment output can
+//! be used for image-patch highlighting.
 //!
 //! # Assumptions
 //!
@@ -75,7 +76,7 @@
 //!             dot(q, d)
 //! ```
 //!
-//! This captures **token-level alignment**: "What is the capital of France?"
+//! The score uses **token-level alignment**: "What is the capital of France?"
 //! can find documents where "capital" and "France" both have strong matches,
 //! even if they appear in different parts of the document.
 //!
@@ -83,8 +84,8 @@
 //!
 //! # Token-Level Alignment & Highlighting
 //!
-//! ColBERT's token-level architecture enables precise identification of which document
-//! tokens match each query token—a core feature for interpretability and snippet extraction.
+//! ColBERT's token-level architecture returns the document token selected for
+//! each query token. That output can be used for highlighting and snippet extraction.
 //!
 //! ```rust
 //! use rankops::rerank::colbert;
@@ -99,8 +100,8 @@
 //! let highlighted = colbert::highlight(&query, &doc, 0.7);
 //! ```
 //!
-//! This capability distinguishes ColBERT from single-vector embeddings, which can only
-//! provide a global relevance score without showing which parts of the document contributed.
+//! Single-vector embeddings return one score per document. They do not expose the
+//! per-query-token matches used by `MaxSim`.
 //!
 //! # Token Pooling
 //!
@@ -115,13 +116,11 @@
 //! Pooled:    [mean1]        [mean2]        [mean3]      (3 vectors = 50% reduction)
 //! ```
 //!
-//! **Research-backed optimization**: Pool factors of 2-3 achieve 50-66% reduction
-//! with <1% quality loss (Clavie et al., 2024). This is a "near-free lunch" for
-//! multi-vector retrieval models.
+//! Clavie et al. (2024) report that pool factors of 2-3 reduce stored vectors by
+//! 50-66% with less than 1% quality loss on their evaluated retrieval tasks.
 //!
-//! **Key insight**: Pool documents at index time, but keep queries at full resolution
-//! for best quality. The compression happens once during indexing, while queries
-//! benefit from full token-level matching.
+//! Pool documents at index time and keep queries at full resolution when query
+//! token detail is needed for scoring or explanations.
 //!
 //! See [Clavie et al., 2024](https://arxiv.org/abs/2409.14683) for the research paper.
 //!
@@ -130,7 +129,7 @@
 //! | Feature | Method | When to Use |
 //! |---------|--------|-------------|
 //! | Default | Greedy agglomerative | Factor 2-3, good balance |
-//! | `hierarchical` | Ward's method | Factor 4+, best quality |
+//! | `hierarchical` | Ward's method | Factor 4+, higher compression |
 //!
 //! Enable Ward's method: `rankops = { features = ["hierarchical"] }`
 //!
@@ -163,9 +162,8 @@ use super::{simd, RerankConfig};
 // ─────────────────────────────────────────────────────────────────────────────
 // Token Pooling (PLAID-style compression)
 //
-// Research-backed optimization: Pool factors of 2-3 achieve 50-66% vector
-// reduction with <1% quality loss (Clavie et al., 2024). This is a "near-free
-// lunch" for multi-vector retrieval models.
+// Clavie et al. (2024) report that pool factors of 2-3 reduce stored vectors by
+// 50-66% with less than 1% quality loss on their evaluated retrieval tasks.
 //
 // PLAID (Santhanam et al., 2022) uses similar clustering for compression, but
 // also employs centroid-based indexing for approximate search. This module
@@ -178,19 +176,18 @@ use super::{simd, RerankConfig};
 
 /// Pool token embeddings by clustering similar tokens and averaging.
 ///
-/// Reduces the number of vectors stored per document while preserving
-/// semantic information. This is a research-backed optimization: pool factors
-/// of 2-3 achieve 50-66% reduction with <1% quality loss (Clavie et al., 2024).
+/// Reduces the number of vectors stored per document by clustering similar
+/// token embeddings and averaging each cluster.
 ///
-/// # Research-Backed Pool Factor Guide
+/// # Pool Factor Guide
 ///
 /// Based on empirical studies (Clavie et al., 2024) on MS MARCO and BEIR:
 ///
-/// | Factor | Storage Saved | Quality Loss | Recommendation |
+/// | Factor | Storage Saved | Quality Loss | Notes |
 /// |--------|---------------|--------------|----------------|
-/// | 2 | 50% | ~0% | **Default choice** - near-free compression |
-/// | 3 | 66% | ~1% | **Good tradeoff** - minimal quality impact |
-/// | 4+ | 75%+ | 3-5% | Use `hierarchical` feature for best quality |
+/// | 2 | 50% | ~0% | Default |
+/// | 3 | 66% | ~1% | Higher compression |
+/// | 4+ | 75%+ | 3-5% | Consider the `hierarchical` feature |
 ///
 /// # Algorithm
 ///
@@ -203,15 +200,14 @@ use super::{simd, RerankConfig};
 /// # When to Use
 ///
 /// - **Index time**: Pool documents when building your index (one-time cost)
-/// - **Query time**: Keep queries at full resolution for best quality
-/// - **Storage-constrained**: Pool factors 2-3 provide substantial savings with minimal loss
+/// - **Query time**: Keep queries at full resolution when token detail matters
+/// - **Storage-constrained**: Pool factors 2-3 reduce stored vectors by 50-66%
 ///
 /// # Research Context
 ///
 /// This implements the compression aspect of PLAID (Santhanam et al., 2022).
 /// PLAID also includes centroid-based indexing for approximate search, which
-/// is a future enhancement. For now, this pooling provides most of PLAID's
-/// storage benefits without the indexing complexity.
+/// is outside this module. This function implements only token compression.
 ///
 /// See `docs/PLAID_AND_OPTIMIZATION.md` for detailed research analysis.
 ///
@@ -490,13 +486,13 @@ pub fn pool_tokens_with_protected(
     Ok(result)
 }
 
-/// Adaptively choose the best pooling strategy based on pool factor.
+/// Choose a pooling strategy based on pool factor.
 ///
 /// - **Factor 1-3**: Uses clustering-based pooling (greedy or hierarchical)
-/// - **Factor 4+**: Uses sequential pooling (faster, nearly as good for aggressive compression)
+/// - **Factor 4+**: Uses sequential pooling
 ///
-/// This is a convenience function that picks reasonable defaults. For full control,
-/// use [`pool_tokens`] or [`pool_tokens_sequential`] directly.
+/// This is a convenience function. Use [`pool_tokens`] or
+/// [`pool_tokens_sequential`] directly when the pooling method should be explicit.
 ///
 /// # Example
 ///
@@ -612,11 +608,11 @@ fn mean_pool(tokens: &[Vec<f32>], indices: &[usize]) -> Vec<f32> {
 /// assert_eq!(ranked[0].0, "doc1");  // Better token alignment
 /// ```
 ///
-/// # Research-Backed Usage
+/// # Two-Stage Usage
 ///
-/// Research shows that BM25 first-stage retrieval followed by MaxSim reranking
-/// often matches PLAID's efficiency-effectiveness trade-off (MacAvaney & Tonellotto, SIGIR 2024).
-/// This makes it the recommended approach for most use cases.
+/// MacAvaney and Tonellotto (SIGIR 2024) compare BM25 first-stage retrieval plus
+/// exact `MaxSim` reranking with PLAID-style indexing. This function implements
+/// the exact `MaxSim` reranking step for candidates retrieved elsewhere.
 ///
 /// For complete pipeline examples, see the rankops documentation.
 ///
@@ -635,17 +631,15 @@ fn mean_pool(tokens: &[Vec<f32>], indices: &[usize]) -> Vec<f32> {
 ///
 /// MaxSim formula: `Score = Σ_{q in query} max_{d in doc} dot(q, d)`
 ///
-/// This captures token-level alignment, enabling fine-grained matching
-/// where query tokens can match document tokens in any position.
+/// This uses token-level alignment: each query token can match document tokens
+/// in any position.
 pub fn rank<I: Clone>(query: &[Vec<f32>], docs: &[(I, Vec<Vec<f32>>)]) -> Vec<(I, f32)> {
     maxsim_with_top_k(query, docs, None)
 }
 
 /// Rank documents with optional `top_k` limit.
 ///
-/// Same as [`rank`] but allows limiting results to top-k for efficiency.
-/// Use this when you only need the top results and want to avoid scoring
-/// all documents.
+/// Same as [`rank`] but truncates the sorted results to `top_k`.
 ///
 /// # Arguments
 ///
@@ -677,10 +671,7 @@ pub fn rank<I: Clone>(query: &[Vec<f32>], docs: &[(I, Vec<Vec<f32>>)]) -> Vec<(I
 ///
 /// # Performance
 ///
-/// When `top_k` is Some(n), this function can be more efficient than
-/// scoring all documents and truncating, especially for large document sets.
-/// However, current implementation scores all documents first, then truncates.
-/// Future optimization: early termination for top-k selection.
+/// Current implementation scores all documents first, then truncates.
 #[must_use]
 pub fn maxsim_with_top_k<I: Clone>(
     query: &[Vec<f32>],

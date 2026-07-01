@@ -1,7 +1,7 @@
 //! Explainability for MaxSim scoring.
 //!
-//! Provides detailed provenance showing which query tokens matched which document tokens,
-//! enabling debugging, highlighting, and user-facing explanations.
+//! Provides provenance showing which query tokens matched which document tokens.
+//! The output can be used for debugging, highlighting, and user-facing explanations.
 
 use super::simd;
 
@@ -44,8 +44,7 @@ pub struct TokenMatch {
 
 /// Compute MaxSim with full explainability.
 ///
-/// Returns detailed information about which tokens matched, enabling debugging
-/// and user-facing explanations.
+/// Returns detailed information about which tokens matched.
 ///
 /// # Arguments
 ///
@@ -185,9 +184,8 @@ pub struct RankedResult<K> {
 
 /// Fine-grained scoring configuration.
 ///
-/// Maps f32 similarity scores to u8 integer scores (0-10) for better discrimination
-/// and interpretability. Based on research showing fine-grained scoring improves
-/// LLM reranker performance.
+/// Maps f32 similarity scores to u8 integer scores (0-10) for downstream
+/// consumers that expect discrete relevance labels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FineGrainedConfig {
     /// Minimum similarity score mapped to 0 (default: -1.0).
@@ -257,9 +255,7 @@ pub struct FineGrainedResult<K> {
 
 /// Rerank with fine-grained integer scores (0-10).
 ///
-/// Maps f32 similarity scores to u8 integer scores for better discrimination.
-/// Research shows fine-grained scoring improves LLM reranker performance by providing
-/// more nuanced relevance signals than binary classification.
+/// Maps f32 similarity scores to u8 integer scores.
 ///
 /// # Algorithm
 ///
