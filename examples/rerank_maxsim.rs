@@ -49,10 +49,8 @@ fn main() {
     for (id, score) in &ranked {
         println!("  {id:20} score={score:.4}");
     }
-    // doc_rust_intro wins: all three query tokens have strong doc matches.
-
     // ── Token-level alignment ───────────────────────────────────────────
-    // Shows which doc token best matches each query token.
+    // Print the document token selected for each query token.
     let best_doc = &docs[0]; // doc_rust_intro
     let alignments = colbert::alignments(&query, &best_doc.1);
     println!("\nAlignments (query_tok -> doc_tok, similarity):");

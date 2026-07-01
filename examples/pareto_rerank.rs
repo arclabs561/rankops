@@ -1,8 +1,8 @@
 //! Pareto-optimal reranking: select results that are non-dominated across
 //! multiple objectives (relevance, diversity, recency).
 //!
-//! Shows how to combine `rankops` (fusion) with `pare` (Pareto frontier)
-//! for multi-objective result selection.
+//! Combines `rankops` fusion with `pare` frontier selection for
+//! multi-objective result selection.
 //!
 //! Run: `cargo run --example pareto_rerank --features pareto`
 //!

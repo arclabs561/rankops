@@ -1,7 +1,7 @@
 //! Evaluation example: compare fusion methods on realistic retrieval data.
 //!
 //! Simulates a hybrid search scenario with BM25, dense, and sparse retrievers
-//! on 20 documents with known relevance judgments. Demonstrates:
+//! on 20 documents with known relevance judgments. Covers:
 //!
 //! - All fusion methods with score comparison
 //! - All evaluation metrics (NDCG, MAP, MRR, Precision, Recall, Hit Rate)
