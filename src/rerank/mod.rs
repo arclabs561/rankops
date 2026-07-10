@@ -38,7 +38,10 @@ pub use scoring::{Scorer, TokenScorer};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Errors from reranking operations.
+///
+/// Match this enum with a wildcard arm so new reranking errors can be added.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum RerankError {
     /// `head_dims` must be less than `query.len()` for tail refinement.
     InvalidHeadDims {

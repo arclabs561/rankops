@@ -30,6 +30,9 @@ jobs:
       - name: test
         run: cargo test --all-targets --all-features
 
+      - name: doc tests
+        run: cargo test --doc --all-features
+
       - name: build rankops-wasm (wasm32)
         run: |
           rustup target add wasm32-unknown-unknown
@@ -55,5 +58,5 @@ jobs:
       - name: Build and test Python bindings
         working-directory: rankops-python
         run: |
-          uv sync --dev
+          uv sync --locked --dev
           uv run pytest tests/ -v

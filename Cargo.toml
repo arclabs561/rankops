@@ -1,6 +1,6 @@
 [package]
 name = "rankops"
-version = "0.1.10"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Rank fusion and reranking"
@@ -8,6 +8,7 @@ repository = "https://github.com/arclabs561/rankops"
 readme = "README.md"
 keywords = ["rerank", "rrf", "retrieval", "rankops", "fusion"]
 categories = ["algorithms", "mathematics", "science"]
+exclude = ["proptest-regressions/**"]
 
 [workspace]
 
