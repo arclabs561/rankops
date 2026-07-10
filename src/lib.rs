@@ -77,7 +77,10 @@ mod proptests;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Errors that can occur during fusion.
+///
+/// Match this enum with a wildcard arm so new fusion errors can be added.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FusionError {
     /// Weights sum to zero or near-zero.
     ZeroWeights,

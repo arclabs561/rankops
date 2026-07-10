@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.2.0] - 2026-07-09
+
+### Added
+- `rerank::colbert::rank_flat` and `maxsim_with_top_k_flat` for row-major token-vector buffers, including borrowed document buffers without nested token-vector allocation.
+
+### Changed
+- Marked public error enums as `#[non_exhaustive]`; downstream exhaustive matches need a wildcard arm.
+
 ## [0.1.10] - 2026-06-13
 
 ### Added

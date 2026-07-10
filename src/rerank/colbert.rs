@@ -157,7 +157,7 @@
 //! let pooled = colbert::pool_tokens(&docs[0].1, 2);
 //! ```
 
-use super::{simd, RerankConfig};
+use super::{simd, RerankConfig, RerankError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Token Pooling (PLAID-style compression)
@@ -698,6 +698,98 @@ pub fn maxsim_with_top_k<I: Clone>(
     results
 }
 
+/// Rank documents using flat row-major token buffers.
+///
+/// This is the flat-buffer counterpart to [`rank`]. `query` and each document
+/// buffer must contain whole token vectors of length `dim`.
+///
+/// # Errors
+///
+/// Returns [`RerankError::DimensionMismatch`] when `dim == 0` or any flat
+/// buffer length is not a multiple of `dim`.
+pub fn rank_flat<I: Clone, B: AsRef<[f32]>>(
+    query: &[f32],
+    docs: &[(I, B)],
+    dim: usize,
+) -> super::Result<Vec<(I, f32)>> {
+    maxsim_with_top_k_flat(query, docs, dim, None)
+}
+
+/// Rank flat row-major token buffers with an optional `top_k` limit.
+///
+/// # Example
+///
+/// ```rust
+/// use rankops::rerank::colbert;
+///
+/// let query = vec![1.0, 0.0, 0.0, 1.0]; // two 2-D query tokens
+/// let docs = vec![
+///     ("doc1", vec![1.0, 0.0, 0.0, 1.0]),
+///     ("doc2", vec![0.5, 0.5]),
+/// ];
+///
+/// let ranked = colbert::rank_flat(&query, &docs, 2).unwrap();
+/// assert_eq!(ranked[0].0, "doc1");
+/// ```
+///
+/// # Errors
+///
+/// Returns [`RerankError::DimensionMismatch`] when `dim == 0` or any flat
+/// buffer length is not a multiple of `dim`.
+pub fn maxsim_with_top_k_flat<I: Clone, B: AsRef<[f32]>>(
+    query: &[f32],
+    docs: &[(I, B)],
+    dim: usize,
+    top_k: Option<usize>,
+) -> super::Result<Vec<(I, f32)>> {
+    validate_flat_tokens(query, dim)?;
+
+    let mut results: Vec<(I, f32)> = Vec::with_capacity(docs.len());
+    for (id, doc_tokens) in docs {
+        let doc_tokens = doc_tokens.as_ref();
+        validate_flat_tokens(doc_tokens, dim)?;
+        let score = maxsim_flat(query, doc_tokens, dim);
+        results.push((id.clone(), score));
+    }
+
+    super::sort_scored_desc(&mut results);
+
+    if let Some(k) = top_k {
+        results.truncate(k);
+    }
+
+    Ok(results)
+}
+
+fn validate_flat_tokens(tokens: &[f32], dim: usize) -> super::Result<()> {
+    if dim == 0 || !tokens.len().is_multiple_of(dim) {
+        return Err(RerankError::DimensionMismatch {
+            expected: dim.max(1),
+            got: tokens.len(),
+        });
+    }
+    Ok(())
+}
+
+fn maxsim_flat(query: &[f32], doc: &[f32], dim: usize) -> f32 {
+    debug_assert!(dim > 0);
+    debug_assert!(query.len().is_multiple_of(dim));
+    debug_assert!(doc.len().is_multiple_of(dim));
+
+    if query.is_empty() || doc.is_empty() {
+        return 0.0;
+    }
+
+    query
+        .chunks_exact(dim)
+        .map(|q| {
+            doc.chunks_exact(dim)
+                .map(|d| simd::dot(q, d))
+                .fold(f32::NEG_INFINITY, f32::max)
+        })
+        .sum()
+}
+
 /// Refine candidates using ``MaxSim``, blending with original scores.
 ///
 /// # Arguments
@@ -1079,6 +1171,98 @@ mod tests {
 
         let ranked = maxsim_with_top_k(&query, &docs, Some(2));
         assert_eq!(ranked.len(), 2);
+    }
+
+    #[test]
+    fn rank_flat_matches_nested_rank() {
+        let query = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let docs = vec![
+            ("d1", vec![vec![1.0, 0.0], vec![0.0, 1.0]]),
+            ("d2", vec![vec![0.5, 0.5]]),
+        ];
+        let flat_query = vec![1.0, 0.0, 0.0, 1.0];
+        let flat_docs = vec![("d1", vec![1.0, 0.0, 0.0, 1.0]), ("d2", vec![0.5, 0.5])];
+
+        let nested = rank(&query, &docs);
+        let flat = rank_flat(&flat_query, &flat_docs, 2).unwrap();
+
+        assert_eq!(flat, nested);
+    }
+
+    #[test]
+    fn rank_flat_accepts_borrowed_doc_buffers() {
+        let query = [1.0, 0.0, 0.0, 1.0];
+        let doc1 = [1.0, 0.0, 0.0, 1.0];
+        let doc2 = [0.5, 0.5];
+        let docs = vec![("d1", &doc1[..]), ("d2", &doc2[..])];
+
+        let ranked = rank_flat(&query, &docs, 2).unwrap();
+
+        assert_eq!(ranked[0], ("d1", 2.0));
+        assert_eq!(ranked[1], ("d2", 1.0));
+    }
+
+    #[test]
+    fn maxsim_with_top_k_flat_truncates_sorted_results() {
+        let query = vec![1.0, 0.0];
+        let docs = vec![
+            ("d1", vec![1.0, 0.0]),
+            ("d2", vec![0.9, 0.1]),
+            ("d3", vec![0.8, 0.2]),
+        ];
+
+        let ranked = maxsim_with_top_k_flat(&query, &docs, 2, Some(2)).unwrap();
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].0, "d1");
+    }
+
+    #[test]
+    fn rank_flat_empty_query_scores_zero() {
+        let docs = vec![("d1", vec![1.0, 0.0])];
+
+        let ranked = rank_flat(&[], &docs, 2).unwrap();
+
+        assert_eq!(ranked, vec![("d1", 0.0)]);
+    }
+
+    #[test]
+    fn rank_flat_empty_doc_scores_zero() {
+        let docs = vec![("d1", Vec::<f32>::new())];
+
+        let ranked = rank_flat(&[1.0, 0.0], &docs, 2).unwrap();
+
+        assert_eq!(ranked, vec![("d1", 0.0)]);
+    }
+
+    #[test]
+    fn rank_flat_rejects_partial_token_rows() {
+        let docs = vec![("d1", vec![1.0, 0.0])];
+
+        let err = rank_flat(&[1.0, 0.0, 0.5], &docs, 2).unwrap_err();
+
+        assert!(matches!(
+            err,
+            RerankError::DimensionMismatch {
+                expected: 2,
+                got: 3
+            }
+        ));
+    }
+
+    #[test]
+    fn rank_flat_rejects_zero_dimension() {
+        let docs = vec![("d1", vec![1.0, 0.0])];
+
+        let err = rank_flat(&[1.0, 0.0], &docs, 0).unwrap_err();
+
+        assert!(matches!(
+            err,
+            RerankError::DimensionMismatch {
+                expected: 1,
+                got: 2
+            }
+        ));
     }
 
     #[test]

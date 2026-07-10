@@ -280,7 +280,10 @@ pub enum QuantizedBatch {
 }
 
 /// Quantization errors.
+///
+/// Match this enum with a wildcard arm so new quantization errors can be added.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum QuantizationError {
     /// Unsupported quantization type.
     UnsupportedType(String),
