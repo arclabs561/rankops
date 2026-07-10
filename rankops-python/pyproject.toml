@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rankops"
-version = "0.1.22"
+version = "0.1.23"
 description = "Python bindings for rankops (Rust) — fusion and reranking for hybrid search."
 readme = "README.md"
 requires-python = ">=3.7"
@@ -55,4 +55,3 @@ dev = [
 # Build in development mode for faster iteration
 # Uncomment to use debug builds during development:
 # config-settings = { build-args = '--profile=dev' }
-
