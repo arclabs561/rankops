@@ -17,7 +17,7 @@ doc = false
 
 [dependencies]
 rankops = { path = ".." }
-pyo3 = "0.28"
+pyo3 = "0.29"
 
 [workspace]
 resolver = "2"
