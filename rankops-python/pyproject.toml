@@ -7,7 +7,7 @@ name = "rankops"
 version = "0.1.23"
 description = "Python bindings for rankops (Rust) — fusion and reranking for hybrid search."
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "Arc", email = "attobop@gmail.com" }]
 keywords = ["vector-search", "hybrid-search", "rrf", "rag", "search", "rankops"]
@@ -16,7 +16,6 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",

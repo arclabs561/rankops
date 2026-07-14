@@ -21,8 +21,6 @@
 // Action: Check pyo3 changelog when upgrading to 0.25+ to see if IntoPyObject migration is needed.
 #![allow(deprecated)]
 
-use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple};
 use ::rankops::explain::{
     combmnz_explain, combsum_explain, dbsf_explain, rrf_explain, ConsensusReport, Explanation,
     FusedResult, RetrieverId, RetrieverStats, SourceContribution,
@@ -39,8 +37,9 @@ use ::rankops::{
     standardized_with_config, weighted, AdditiveMultiTaskConfig, FusionConfig, Normalization,
     RrfConfig, StandardizedConfig, WeightedConfig,
 };
+use pyo3::prelude::*;
+use pyo3::types::{PyList, PyTuple};
 
-/// Helper to create (id, score) tuples for Python - PyO3 0.27 compatible
 fn make_result_tuple<'py>(
     py: Python<'py>,
     id: String,
@@ -211,7 +210,7 @@ fn rrf_multi_py(
     // Convert Python lists to Rust Vec<Vec<(String, f32)>>
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
 
@@ -238,7 +237,7 @@ fn rrf_multi_py(
 fn py_list_to_ranked(py_list: &Bound<'_, PyList>) -> PyResult<Vec<(String, f32)>> {
     let mut result = Vec::new();
     for item in py_list.iter() {
-        let tuple = item.downcast::<PyTuple>()?;
+        let tuple = item.cast::<PyTuple>()?;
         if tuple.len() != 2 {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Each item must be a (id, score) tuple",
@@ -299,7 +298,7 @@ fn isr_multi_py(
     }
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
@@ -352,7 +351,7 @@ fn combsum_multi_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
@@ -405,7 +404,7 @@ fn combmnz_multi_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
@@ -458,7 +457,7 @@ fn borda_multi_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
@@ -549,7 +548,7 @@ fn dbsf_multi_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
@@ -578,7 +577,7 @@ fn standardized_multi_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
@@ -711,7 +710,7 @@ fn rrf_explain_py(
     }
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let mut ids = Vec::new();
@@ -750,7 +749,7 @@ fn combsum_explain_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let mut ids = Vec::new();
@@ -789,7 +788,7 @@ fn combmnz_explain_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let mut ids = Vec::new();
@@ -828,7 +827,7 @@ fn dbsf_explain_py(
 ) -> PyResult<Py<PyList>> {
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
-        let py_list = list.downcast::<PyList>()?;
+        let py_list = list.cast::<PyList>()?;
         rust_lists.push(py_list_to_ranked(py_list)?);
     }
     let mut ids = Vec::new();
