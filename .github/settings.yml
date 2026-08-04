@@ -15,7 +15,11 @@ repository:
   delete_branch_on_merge: true
 
   topics:
+    - colbert
+    - diversity
     - information-retrieval
-    - reranking
+    - mmr
     - rank-fusion
+    - reranking
+    - rrf
     - rust
