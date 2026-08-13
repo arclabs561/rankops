@@ -593,6 +593,9 @@ impl DppConfig {
 /// the **joint** diversity of the selected set via orthogonality in
 /// embedding space.
 ///
+/// Embedding norms are retained and therefore act as an additional implicit quality signal.
+/// Normalize embeddings first when only their directions should determine diversity.
+///
 /// # Arguments
 ///
 /// * `candidates` - `(id, relevance_score)` pairs
@@ -655,63 +658,66 @@ pub fn dpp<I: Clone, V: AsRef<[f32]>>(
         return Vec::new();
     }
 
-    // Build quality scores (relevance scaled by alpha)
-    let qualities: Vec<f32> = candidates
-        .iter()
-        .map(|(_, r)| (r * config.alpha).exp())
-        .collect();
+    let dimension = embeddings[0].as_ref().len();
+    assert!(
+        embeddings
+            .iter()
+            .all(|embedding| embedding.as_ref().len() == dimension),
+        "all embeddings must have the same dimension"
+    );
 
     // Fast Greedy DPP: iteratively select item that maximizes log-det gain
     let mut selected_indices: Vec<usize> = Vec::with_capacity(config.k.min(n));
-    let mut remaining: Vec<usize> = (0..n).collect();
+    let mut selected = vec![false; n];
 
-    // Track orthogonal components for efficient updates
-    // c[i] = ||v_i - proj_{selected}(v_i)||^2 (starts as ||v_i||^2)
-    let mut c: Vec<f32> = embeddings
+    // `coordinates[i]` are the Cholesky/Gram-Schmidt coordinates of weighted vector i
+    // along the pivots selected so far. `residuals[i]` is its remaining squared norm,
+    // equivalently the determinant marginal gain for adding i to the selected set.
+    let mut coordinates = vec![Vec::<f32>::with_capacity(config.k.min(n)); n];
+    let mut residuals: Vec<f32> = embeddings
         .iter()
-        .map(|e| {
-            let v = e.as_ref();
-            simd::dot(v, v)
-        })
+        .map(|embedding| simd::dot(embedding.as_ref(), embedding.as_ref()))
         .collect();
 
-    // d[i][j] stores dot products needed for incremental updates
-    // We compute on-the-fly to save memory
-
     for _ in 0..config.k.min(n) {
-        if remaining.is_empty() {
-            break;
-        }
-
-        // Find item with maximum quality * residual_norm
-        // This is the greedy approximation to max log-det
-        let mut best_idx = 0;
+        // Find the maximum determinant marginal. Scanning original indices preserves the
+        // deterministic lowest-index policy on ties.
+        let mut chosen = None;
         let mut best_score = f32::NEG_INFINITY;
-
-        for (pos, &cand_idx) in remaining.iter().enumerate() {
-            // DPP score: quality * sqrt(c[i]) where c[i] is residual norm squared
-            // Using sqrt for numerical stability
-            let score = qualities[cand_idx] * c[cand_idx].max(0.0).sqrt();
-
-            if score > best_score {
+        for cand_idx in 0..n {
+            if selected[cand_idx] {
+                continue;
+            }
+            // log(q_i * ||v_i^perp||) avoids materializing q_i = exp(alpha * relevance),
+            // which can overflow without changing the ordering for finite inputs.
+            let score = config.alpha * candidates[cand_idx].1 + 0.5 * residuals[cand_idx].ln();
+            if chosen.is_none() || score > best_score {
                 best_score = score;
-                best_idx = pos;
+                chosen = Some(cand_idx);
             }
         }
-
-        let chosen = remaining.swap_remove(best_idx);
+        let Some(chosen) = chosen else { break };
+        selected[chosen] = true;
         selected_indices.push(chosen);
 
-        // Update residual norms for remaining items
-        // c[i] -= (v_i · v_chosen)^2 / c[chosen]
-        let chosen_emb = embeddings[chosen].as_ref();
-        let c_chosen = c[chosen].max(1e-9); // Avoid division by zero
-
-        for &idx in &remaining {
-            let v_i = embeddings[idx].as_ref();
-            let dot_product = simd::dot(v_i, chosen_emb);
-            c[idx] -= (dot_product * dot_product) / c_chosen;
-            c[idx] = c[idx].max(0.0); // Clamp to avoid negative from numerical error
+        let pivot = residuals[chosen].max(0.0).sqrt();
+        for idx in 0..n {
+            if selected[idx] {
+                continue;
+            }
+            let dot = simd::dot(embeddings[idx].as_ref(), embeddings[chosen].as_ref());
+            let projected_dot: f32 = coordinates[idx]
+                .iter()
+                .zip(&coordinates[chosen])
+                .map(|(left, right)| left * right)
+                .sum();
+            let coordinate = if pivot > 0.0 {
+                (dot - projected_dot) / pivot
+            } else {
+                0.0
+            };
+            coordinates[idx].push(coordinate);
+            residuals[idx] = (residuals[idx] - coordinate * coordinate).max(0.0);
         }
     }
 
@@ -1197,6 +1203,151 @@ mod proptests {
 mod dpp_tests {
     use super::*;
 
+    fn determinant(mut matrix: Vec<Vec<f64>>) -> f64 {
+        let n = matrix.len();
+        let mut determinant = 1.0;
+        for column in 0..n {
+            let pivot = (column..n)
+                .max_by(|&left, &right| {
+                    matrix[left][column]
+                        .abs()
+                        .total_cmp(&matrix[right][column].abs())
+                })
+                .unwrap();
+            if matrix[pivot][column].abs() < 1e-12 {
+                return 0.0;
+            }
+            if pivot != column {
+                matrix.swap(pivot, column);
+                determinant = -determinant;
+            }
+            let diagonal = matrix[column][column];
+            determinant *= diagonal;
+            let pivot_row = matrix[column].clone();
+            for row in matrix.iter_mut().skip(column + 1) {
+                let factor = row[column] / diagonal;
+                for (entry, value) in row.iter_mut().enumerate().skip(column + 1) {
+                    *value -= factor * pivot_row[entry];
+                }
+            }
+        }
+        determinant
+    }
+
+    fn brute_force_greedy(
+        candidates: &[(usize, f32)],
+        embeddings: &[Vec<f32>],
+        config: DppConfig,
+    ) -> Vec<usize> {
+        let mut selected = Vec::new();
+        while selected.len() < config.k.min(candidates.len()) {
+            let mut best = None;
+            let mut best_determinant = f64::NEG_INFINITY;
+            for candidate in 0..candidates.len() {
+                if selected.contains(&candidate) {
+                    continue;
+                }
+                let indices: Vec<_> = selected
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(candidate))
+                    .collect();
+                let kernel = indices
+                    .iter()
+                    .map(|&left| {
+                        indices
+                            .iter()
+                            .map(|&right| {
+                                let dot: f64 = embeddings[left]
+                                    .iter()
+                                    .zip(&embeddings[right])
+                                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                                    .sum();
+                                let quality = (f64::from(config.alpha)
+                                    * f64::from(candidates[left].1 + candidates[right].1))
+                                .exp();
+                                quality * dot
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let candidate_determinant = determinant(kernel);
+                if candidate_determinant > best_determinant {
+                    best_determinant = candidate_determinant;
+                    best = Some(candidate);
+                }
+            }
+            selected.push(best.unwrap());
+        }
+        selected
+    }
+
+    #[test]
+    fn dpp_matches_brute_force_determinant_greedy_at_every_prefix() {
+        let candidates = vec![(0, 0.2), (1, -0.1), (2, 0.4), (3, 0.0), (4, 0.3)];
+        let embeddings = vec![
+            vec![1.0, 2.0, 0.0],
+            vec![0.0, 1.0, 1.0],
+            vec![2.0, 0.0, 1.0],
+            vec![1.0, 1.0, 1.0],
+            vec![-1.0, 2.0, 1.0],
+        ];
+        let config = DppConfig::new(3, 0.7);
+        let expected = brute_force_greedy(&candidates, &embeddings, config);
+        let actual: Vec<_> = dpp(&candidates, &embeddings, config)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        for prefix_len in 1..=config.k {
+            assert_eq!(&actual[..prefix_len], &expected[..prefix_len]);
+        }
+    }
+
+    #[test]
+    fn dpp_uses_orthogonalized_coordinates_for_later_updates() {
+        let candidates = vec![(0, 0.0), (1, 0.0), (2, 0.0), (3, 0.0)];
+        let embeddings = vec![
+            vec![-2.0, -2.0, -2.0],
+            vec![-2.0, -2.0, -1.0],
+            vec![-2.0, -2.0, 0.0],
+            vec![-2.0, -1.0, -2.0],
+        ];
+
+        let selected: Vec<_> = dpp(&candidates, &embeddings, DppConfig::new(3, 0.0))
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(selected, vec![0, 2, 3]);
+    }
+
+    #[test]
+    fn dpp_large_relevance_does_not_overflow_selection_score() {
+        let candidates = vec![(0, 1_000.0), (1, 999.0)];
+        let embeddings = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let selected = dpp(&candidates, &embeddings, DppConfig::new(2, 1_000.0));
+        assert_eq!(selected, candidates);
+    }
+
+    #[test]
+    fn dpp_zero_residual_ties_use_original_order() {
+        let candidates = vec![(0, 0.0), (1, 0.0), (2, 0.0)];
+        let embeddings = vec![vec![0.0, 0.0]; 3];
+        assert_eq!(
+            dpp(&candidates, &embeddings, DppConfig::new(3, 0.0)),
+            candidates
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "all embeddings must have the same dimension")]
+    fn dpp_rejects_mixed_embedding_dimensions() {
+        let _ = dpp(
+            &[(0, 0.0), (1, 0.0)],
+            &[vec![1.0, 0.0], vec![1.0]],
+            DppConfig::default(),
+        );
+    }
+
     #[test]
     fn dpp_orthogonal_prefers_diverse() {
         // Three orthogonal vectors with high relevance
@@ -1331,7 +1482,7 @@ mod failure_mode_tests {
         assert_eq!(result.len(), 2);
     }
 
-    /// DPP with anti-correlated embeddings (negative dot products).
+    /// DPP with opposite embeddings (negative dot products but zero joint determinant).
     #[test]
     fn dpp_anticorrelated_embeddings() {
         let candidates = vec![("a", 0.9), ("b", 0.85)];
@@ -1340,7 +1491,7 @@ mod failure_mode_tests {
             vec![-1.0, 0.0], // Opposite direction
         ];
 
-        // Orthogonal in diversity terms (should both be selected)
+        // Fixed-k selection remains deterministic even after the first vector exhausts the rank.
         let result = dpp(&candidates, &embeddings, DppConfig::default().with_k(2));
         assert_eq!(result.len(), 2);
     }
