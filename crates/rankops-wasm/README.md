@@ -11,6 +11,9 @@ with `num_queries`, `k`, `ndcg_at_k`, `map`, `mrr`, `recall_at_k`, and
 `precision_at_k`. It throws for malformed input, duplicate documents, or
 non-finite run scores.
 
+`evaluate_trec_detailed(qrels, run, k)` adds deterministic per-query metrics
+and retrieved/relevant-document counts.
+
 ## License
 
 MIT OR Apache-2.0

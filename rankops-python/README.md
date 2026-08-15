@@ -56,6 +56,9 @@ summary = rankops.evaluate_trec(
 assert summary["ndcg_at_k"] == 1.0
 ```
 
+Use `evaluate_trec_detailed` when you need the same metrics for each evaluated
+query, including retrieved and relevant-document counts.
+
 ## API Reference
 
 ### Rank-based Fusion (ignores scores)
