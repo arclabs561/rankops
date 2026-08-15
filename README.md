@@ -75,7 +75,7 @@ let selected = mmr(&candidates, &similarity, config);
 
 ## Evaluation
 
-Standard IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, `hit_rate`. Plus `optimize_fusion` for grid search over fusion parameters.
+Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`. They expect a ranked, duplicate-free list with finite scores. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics. `optimize_fusion` is a grid-search helper; choose parameters on held-out queries before reporting final results.
 
 The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k.
 
