@@ -40,10 +40,10 @@ fn checked_in_trec_parity_corpus() {
 }
 
 #[test]
-fn optional_reference_binary_matches_corpus() {
-    let Some(binary) = std::env::var_os("RANKOPS_TREC_EVAL") else {
-        return;
-    };
+#[ignore = "requires RANKOPS_TREC_EVAL; run scripts/verify-trec-parity.sh"]
+fn reference_binary_matches_corpus() {
+    let binary = std::env::var_os("RANKOPS_TREC_EVAL")
+        .expect("RANKOPS_TREC_EVAL is required; run scripts/verify-trec-parity.sh");
     let qrels_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/trec/parity.qrels"

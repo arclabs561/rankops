@@ -11,4 +11,4 @@ fi
 
 cd "$repo_root"
 RANKOPS_TREC_EVAL="$(command -v "$trec_eval_bin")" \
-    cargo test --test trec_parity optional_reference_binary_matches_corpus
+    cargo test --test trec_parity --ignored reference_binary_matches_corpus
