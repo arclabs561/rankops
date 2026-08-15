@@ -18,7 +18,6 @@ def test_evaluate_trec_returns_collection_metrics():
     assert result["mrr"] == pytest.approx(1.0)
     assert result["recall_at_k"] == pytest.approx(1.0)
     assert result["precision_at_k"] == pytest.approx(0.5)
-    assert result["judged_at_k"] == pytest.approx(1.0)
 
 
 def test_evaluate_trec_rejects_non_finite_scores():
@@ -34,6 +33,7 @@ def test_evaluate_trec_detailed_includes_per_query_diagnostics():
     )
 
     assert result["num_queries"] == 2
+    assert result["judged_at_k"] == pytest.approx(0.05)
     assert result["queries"] == [
         {
             "query_id": "q1",

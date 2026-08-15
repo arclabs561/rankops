@@ -456,8 +456,6 @@ pub struct TrecSummary {
     pub recall_at_k: f64,
     /// Mean P@k, padding short runs with non-relevant results.
     pub precision_at_k: f64,
-    /// Mean Judged@k: the share of the top k results with any qrels judgment.
-    pub judged_at_k: f64,
 }
 
 /// Metrics for one qrels query under a [`TrecEvalConfig`].
@@ -495,6 +493,26 @@ pub struct TrecEvaluation {
     pub summary: TrecSummary,
     /// Per-query metrics in deterministic qrels query order.
     pub queries: Vec<TrecQueryMetrics>,
+}
+
+impl TrecEvaluation {
+    /// Mean Judged@k over the queries that contributed to this evaluation.
+    ///
+    /// This is the share of the top-k results with any qrels judgment,
+    /// including zero-relevance judgments. It is diagnostic only and does not
+    /// affect the other metric denominators.
+    #[must_use]
+    pub fn judged_at_k(&self) -> f64 {
+        if self.queries.is_empty() {
+            0.0
+        } else {
+            self.queries
+                .iter()
+                .map(|query| query.judged_at_k)
+                .sum::<f64>()
+                / self.queries.len() as f64
+        }
+    }
 }
 
 fn relevant(rel: i64, config: TrecEvalConfig) -> bool {
@@ -628,7 +646,6 @@ pub fn evaluate_detailed_with_config(
         mrr: 0.0,
         recall_at_k: 0.0,
         precision_at_k: 0.0,
-        judged_at_k: 0.0,
     };
     let mut queries = Vec::new();
     let empty = Vec::new();
@@ -647,7 +664,6 @@ pub fn evaluate_detailed_with_config(
         summary.mrr += query.reciprocal_rank;
         summary.recall_at_k += query.recall_at_k;
         summary.precision_at_k += query.precision_at_k;
-        summary.judged_at_k += query.judged_at_k;
         queries.push(query);
     }
     if summary.num_queries > 0 {
@@ -657,7 +673,6 @@ pub fn evaluate_detailed_with_config(
         summary.mrr /= count;
         summary.recall_at_k /= count;
         summary.precision_at_k /= count;
-        summary.judged_at_k /= count;
     }
     TrecEvaluation { summary, queries }
 }
@@ -744,7 +759,7 @@ mod tests {
         assert_eq!(evaluation.queries[1].num_relevant, 1);
         assert_eq!(evaluation.queries[1].num_judged_at_k, 0);
         assert_eq!(evaluation.queries[1].judged_at_k, 0.0);
-        assert_eq!(evaluation.summary.judged_at_k, 0.5);
+        assert_eq!(evaluation.judged_at_k(), 0.5);
     }
 
     #[test]
