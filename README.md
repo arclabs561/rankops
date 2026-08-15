@@ -77,7 +77,7 @@ let selected = mmr(&candidates, &similarity, config);
 
 Standard IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, `hit_rate`. Plus `optimize_fusion` for grid search over fusion parameters.
 
-The `trec` module reads TREC-format qrels and run files and reports collection-level mean metrics over all judged queries (the BEIR / `trec_eval` / ranx number):
+The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k.
 
 ```rust
 use rankops::trec::{parse_qrels, parse_run, evaluate};
