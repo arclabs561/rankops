@@ -80,13 +80,16 @@ Standard IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`,
 The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k.
 
 ```rust
-use rankops::trec::{parse_qrels, parse_run, evaluate};
+use rankops::trec::{evaluate_with_config, parse_qrels, parse_run, TrecEvalConfig};
 use std::fs::File;
 
 let qrels = parse_qrels(File::open("qrels.txt")?)?;
 let run = parse_run(File::open("run.txt")?)?;
-let summary = evaluate(&run, &qrels, 10); // mean nDCG@10, MAP, MRR, recall, precision
+let config = TrecEvalConfig::new(10).with_relevance_level(1);
+let summary = evaluate_with_config(&run, &qrels, config);
 ```
+
+`evaluate(&run, &qrels, k)` remains the short form for the default configuration. Validated `TrecRun` and `TrecQrels` values can also be built from in-memory records. The checked-in parity corpus is part of `cargo test`; with `trec_eval` installed, run `scripts/verify-trec-parity.sh` for an external comparison.
 
 ## Diagnostics
 
