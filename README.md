@@ -77,7 +77,7 @@ let selected = mmr(&candidates, &similarity, config);
 
 Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`. `ndcg_at_k` uses linear gain; use `ndcg_at_k_with_gain` and `metrics::NdcgGain::Exponential` when your graded-relevance task calls for `2^rel - 1` instead. These low-level functions accept the ordering supplied by the caller; validate external lists with `validate` before evaluating. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics. `optimize_fusion` is a grid-search helper; choose parameters on held-out queries before reporting final results.
 
-The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, P@k, and Judged@k. Judged@k is the share of the top k results that have any qrels judgment, including zero-relevance judgments; it is diagnostic only and never changes metric denominators. Use `evaluate_detailed` or `evaluate_detailed_with_config` to retain deterministic per-query values and counts.
+The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k. `evaluate_detailed` and `evaluate_detailed_with_config` also report Judged@k: the share of the top k results that have any qrels judgment, including zero-relevance judgments. It is diagnostic only and never changes metric denominators.
 
 ```rust
 use rankops::trec::{evaluate_with_config, parse_qrels, parse_run, TrecEvalConfig};

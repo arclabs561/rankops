@@ -121,7 +121,6 @@ fn trec_summary_to_js(summary: rankops::trec::TrecSummary) -> Result<JsValue, Js
         ("mrr", JsValue::from_f64(summary.mrr)),
         ("recall_at_k", JsValue::from_f64(summary.recall_at_k)),
         ("precision_at_k", JsValue::from_f64(summary.precision_at_k)),
-        ("judged_at_k", JsValue::from_f64(summary.judged_at_k)),
     ] {
         js_sys::Reflect::set(&object, &JsValue::from_str(name), &value)?;
     }
@@ -131,6 +130,7 @@ fn trec_summary_to_js(summary: rankops::trec::TrecSummary) -> Result<JsValue, Js
 fn trec_evaluation_to_js(evaluation: rankops::trec::TrecEvaluation) -> Result<JsValue, JsValue> {
     use wasm_bindgen::JsCast;
 
+    let judged_at_k = evaluation.judged_at_k();
     let object: js_sys::Object = trec_summary_to_js(evaluation.summary)?
         .dyn_into()
         .map_err(|_| JsValue::from_str("failed to construct TREC evaluation object"))?;
@@ -163,6 +163,11 @@ fn trec_evaluation_to_js(evaluation: rankops::trec::TrecEvaluation) -> Result<Js
         queries.push(&item);
     }
     js_sys::Reflect::set(&object, &JsValue::from_str("queries"), &queries)?;
+    js_sys::Reflect::set(
+        &object,
+        &JsValue::from_str("judged_at_k"),
+        &JsValue::from_f64(judged_at_k),
+    )?;
     Ok(object.into())
 }
 

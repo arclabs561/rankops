@@ -156,7 +156,6 @@ fn evaluate_trec_py<'py>(
     result.set_item("mrr", summary.mrr)?;
     result.set_item("recall_at_k", summary.recall_at_k)?;
     result.set_item("precision_at_k", summary.precision_at_k)?;
-    result.set_item("judged_at_k", summary.judged_at_k)?;
     Ok(result)
 }
 
@@ -181,7 +180,7 @@ fn evaluate_trec_detailed_py<'py>(
     result.set_item("mrr", evaluation.summary.mrr)?;
     result.set_item("recall_at_k", evaluation.summary.recall_at_k)?;
     result.set_item("precision_at_k", evaluation.summary.precision_at_k)?;
-    result.set_item("judged_at_k", evaluation.summary.judged_at_k)?;
+    result.set_item("judged_at_k", evaluation.judged_at_k())?;
     let queries = PyList::empty(py);
     for query in evaluation.queries {
         let item = PyDict::new(py);
