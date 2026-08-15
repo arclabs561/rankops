@@ -111,6 +111,51 @@ fn results_to_js(results: &[(String, f32)]) -> JsValue {
     array.into()
 }
 
+fn trec_summary_to_js(summary: rankops::trec::TrecSummary) -> Result<JsValue, JsValue> {
+    let object = js_sys::Object::new();
+    for (name, value) in [
+        ("num_queries", JsValue::from_f64(summary.num_queries as f64)),
+        ("k", JsValue::from_f64(summary.k as f64)),
+        ("ndcg_at_k", JsValue::from_f64(summary.ndcg_at_k)),
+        ("map", JsValue::from_f64(summary.map)),
+        ("mrr", JsValue::from_f64(summary.mrr)),
+        ("recall_at_k", JsValue::from_f64(summary.recall_at_k)),
+        ("precision_at_k", JsValue::from_f64(summary.precision_at_k)),
+    ] {
+        js_sys::Reflect::set(&object, &JsValue::from_str(name), &value)?;
+    }
+    Ok(object.into())
+}
+
+fn trec_evaluation_to_js(
+    evaluation: rankops::trec::TrecEvaluation,
+) -> Result<JsValue, JsValue> {
+    use wasm_bindgen::JsCast;
+
+    let object: js_sys::Object = trec_summary_to_js(evaluation.summary)?
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("failed to construct TREC evaluation object"))?;
+    let queries = js_sys::Array::new();
+    for query in evaluation.queries {
+        let item = js_sys::Object::new();
+        for (name, value) in [
+            ("query_id", JsValue::from_str(&query.query_id)),
+            ("num_retrieved", JsValue::from_f64(query.num_retrieved as f64)),
+            ("num_relevant", JsValue::from_f64(query.num_relevant as f64)),
+            ("ndcg_at_k", JsValue::from_f64(query.ndcg_at_k)),
+            ("average_precision", JsValue::from_f64(query.average_precision)),
+            ("reciprocal_rank", JsValue::from_f64(query.reciprocal_rank)),
+            ("recall_at_k", JsValue::from_f64(query.recall_at_k)),
+            ("precision_at_k", JsValue::from_f64(query.precision_at_k)),
+        ] {
+            js_sys::Reflect::set(&item, &JsValue::from_str(name), &value)?;
+        }
+        queries.push(&item);
+    }
+    js_sys::Reflect::set(&object, &JsValue::from_str("queries"), &queries)?;
+    Ok(object.into())
+}
+
 fn parse_normalization(s: &str) -> Result<Normalization, JsValue> {
     match s.to_lowercase().as_str() {
         "none" => Ok(Normalization::None),
@@ -326,6 +371,26 @@ pub fn normalize_scores(results: &JsValue, method: &str) -> Result<JsValue, JsVa
 // ─────────────────────────────────────────────────────────────────────────────
 // Evaluation metrics
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Parse TREC qrels/run text and return validated collection-level metrics.
+#[wasm_bindgen]
+pub fn evaluate_trec(qrels: &str, run: &str, k: usize) -> Result<JsValue, JsValue> {
+    let qrels = rankops::trec::parse_qrels(qrels.as_bytes())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let run = rankops::trec::parse_run(run.as_bytes())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    trec_summary_to_js(rankops::trec::evaluate(&run, &qrels, k))
+}
+
+/// Parse TREC qrels/run text and return collection plus per-query metrics.
+#[wasm_bindgen]
+pub fn evaluate_trec_detailed(qrels: &str, run: &str, k: usize) -> Result<JsValue, JsValue> {
+    let qrels = rankops::trec::parse_qrels(qrels.as_bytes())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let run = rankops::trec::parse_run(run.as_bytes())
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    trec_evaluation_to_js(rankops::trec::evaluate_detailed(&run, &qrels, k))
+}
 
 #[wasm_bindgen]
 pub fn ndcg_at_k(results: &JsValue, qrels: &JsValue, k: usize) -> Result<f64, JsValue> {

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Evaluation helpers now use linear-gain nDCG, pad P@k for short runs, and use the full relevant set as the MAP@k denominator; `pipeline::compare` evaluates the exact requested metric/cutoff.
+- Fusion output has a deterministic fallback order for equal scores.
+
+### Changed
+- `trec` now stores validated qrels and runs in opaque, deterministic containers; add `TrecQrels::from_records` and `TrecRun::from_records` for in-memory input.
+- Add `TrecEvalConfig` and `evaluate_with_config` for relevance thresholds, qrels-only-query handling, and per-query result limits. TREC calculations now use `f64` scores and aggregates.
+
+### Added
+- TREC parity fixtures and an opt-in `scripts/verify-trec-parity.sh` comparison against a locally installed `trec_eval`.
+
 ## [0.2.0] - 2026-07-09
 
 ### Added

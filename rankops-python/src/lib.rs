@@ -38,7 +38,7 @@ use ::rankops::{
     RrfConfig, StandardizedConfig, WeightedConfig,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 fn make_result_tuple<'py>(
     py: Python<'py>,
@@ -108,6 +108,9 @@ pub fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_py, m)?)?;
     m.add_class::<ValidationResultPy>()?;
 
+    m.add_function(wrap_pyfunction!(evaluate_trec_py, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_trec_detailed_py, m)?)?;
+
     // Reranking: SIMD ops
     m.add_function(wrap_pyfunction!(dot_py, m)?)?;
     m.add_function(wrap_pyfunction!(cosine_py, m)?)?;
@@ -130,6 +133,68 @@ pub fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(normalize_scores_py, m)?)?;
 
     Ok(())
+}
+
+/// Parse TREC qrels/run text and return collection-level metrics.
+#[pyfunction(name = "evaluate_trec")]
+fn evaluate_trec_py<'py>(
+    py: Python<'py>,
+    qrels: &str,
+    run: &str,
+    k: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let qrels = ::rankops::trec::parse_qrels(qrels.as_bytes())
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    let run = ::rankops::trec::parse_run(run.as_bytes())
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    let summary = ::rankops::trec::evaluate(&run, &qrels, k);
+    let result = PyDict::new(py);
+    result.set_item("num_queries", summary.num_queries)?;
+    result.set_item("k", summary.k)?;
+    result.set_item("ndcg_at_k", summary.ndcg_at_k)?;
+    result.set_item("map", summary.map)?;
+    result.set_item("mrr", summary.mrr)?;
+    result.set_item("recall_at_k", summary.recall_at_k)?;
+    result.set_item("precision_at_k", summary.precision_at_k)?;
+    Ok(result)
+}
+
+/// Parse TREC qrels/run text and retain per-query metrics alongside the summary.
+#[pyfunction(name = "evaluate_trec_detailed")]
+fn evaluate_trec_detailed_py<'py>(
+    py: Python<'py>,
+    qrels: &str,
+    run: &str,
+    k: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let qrels = ::rankops::trec::parse_qrels(qrels.as_bytes())
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    let run = ::rankops::trec::parse_run(run.as_bytes())
+        .map_err(|error| PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string()))?;
+    let evaluation = ::rankops::trec::evaluate_detailed(&run, &qrels, k);
+    let result = PyDict::new(py);
+    result.set_item("num_queries", evaluation.summary.num_queries)?;
+    result.set_item("k", evaluation.summary.k)?;
+    result.set_item("ndcg_at_k", evaluation.summary.ndcg_at_k)?;
+    result.set_item("map", evaluation.summary.map)?;
+    result.set_item("mrr", evaluation.summary.mrr)?;
+    result.set_item("recall_at_k", evaluation.summary.recall_at_k)?;
+    result.set_item("precision_at_k", evaluation.summary.precision_at_k)?;
+    let queries = PyList::empty(py);
+    for query in evaluation.queries {
+        let item = PyDict::new(py);
+        item.set_item("query_id", query.query_id)?;
+        item.set_item("num_retrieved", query.num_retrieved)?;
+        item.set_item("num_relevant", query.num_relevant)?;
+        item.set_item("ndcg_at_k", query.ndcg_at_k)?;
+        item.set_item("average_precision", query.average_precision)?;
+        item.set_item("reciprocal_rank", query.reciprocal_rank)?;
+        item.set_item("recall_at_k", query.recall_at_k)?;
+        item.set_item("precision_at_k", query.precision_at_k)?;
+        queries.append(item)?;
+    }
+    result.set_item("queries", queries)?;
+    Ok(result)
 }
 
 /// Python module for rank fusion.

@@ -33,6 +33,15 @@ jobs:
       - name: test
         run: cargo test --all-targets --all-features
 
+      - name: Verify TREC parity
+        run: |
+          git init /tmp/trec_eval
+          git -C /tmp/trec_eval remote add origin https://github.com/usnistgov/trec_eval.git
+          git -C /tmp/trec_eval fetch --depth=1 origin f4253652c8efd0d86ddffd0d163cc0a0f813111a # v10.0
+          git -C /tmp/trec_eval checkout --detach FETCH_HEAD
+          make -C /tmp/trec_eval
+          TREC_EVAL_BIN=/tmp/trec_eval/trec_eval scripts/verify-trec-parity.sh
+
       - name: doc tests
         run: cargo test --doc --all-features
 
