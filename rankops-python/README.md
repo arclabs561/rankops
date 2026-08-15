@@ -41,6 +41,21 @@ fused = rankops.rrf(bm25, dense, k=60)
 
 **Why RRF?** BM25 scores are 0-100, dense scores are 0-1. RRF ignores scores and uses only rank positions, so no normalization needed.
 
+## TREC evaluation
+
+Pass qrels and run files as strings to calculate collection-level TREC-style
+metrics. Invalid records, duplicate documents, and non-finite run scores raise
+`ValueError`.
+
+```python
+summary = rankops.evaluate_trec(
+    "q1 0 doc_1 1\\n",
+    "q1 Q0 doc_1 1 12.5 run\\n",
+    k=10,
+)
+assert summary["ndcg_at_k"] == 1.0
+```
+
 ## API Reference
 
 ### Rank-based Fusion (ignores scores)

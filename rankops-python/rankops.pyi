@@ -1,12 +1,21 @@
 """Type stubs for rankops Python bindings (PyPI package: rankops)."""
 
-from typing import List, Tuple, Optional, Literal
+from typing import Dict, List, Tuple, Optional, Literal, Union
 
 __version__: str
 
 RankedList = List[Tuple[str, float]]
 MultiRankedLists = List[RankedList]
 NormalizationType = Literal["zscore", "minmax", "sum", "rank", "none"]
+
+def evaluate_trec(qrels: str, run: str, k: int) -> Dict[str, Union[float, int]]:
+    """Evaluate a TREC qrels/run pair with collection-level metrics.
+
+    Raises:
+        ValueError: If either input is malformed, has duplicate documents, or
+            contains a non-finite score.
+    """
+    ...
 
 # Configuration Classes
 
