@@ -18,6 +18,12 @@ fn assert_close(actual: f64, expected: f64) {
     );
 }
 
+fn reference_value(values: &BTreeMap<String, f64>, measure: &str, stdout: &str) -> f64 {
+    *values
+        .get(measure)
+        .unwrap_or_else(|| panic!("trec_eval did not report {measure}; output was:\n{stdout}"))
+}
+
 #[test]
 fn checked_in_trec_parity_corpus() {
     let summary = summary();
@@ -79,13 +85,22 @@ fn optional_reference_binary_matches_corpus() {
             else {
                 return None;
             };
-            (topic == "all").then(|| (measure, value.parse::<f64>().unwrap()))
+            (topic == "all").then(|| (measure.to_owned(), value.parse::<f64>().unwrap()))
         })
         .collect();
     let summary = summary();
-    assert_close(summary.map, values["map"]);
-    assert_close(summary.mrr, values["recip_rank"]);
-    assert_close(summary.ndcg_at_k, values["ndcg_cut_2"]);
-    assert_close(summary.recall_at_k, values["recall_2"]);
-    assert_close(summary.precision_at_k, values["P_2"]);
+    assert_close(summary.map, reference_value(&values, "map", &stdout));
+    assert_close(summary.mrr, reference_value(&values, "recip_rank", &stdout));
+    assert_close(
+        summary.ndcg_at_k,
+        reference_value(&values, "ndcg_cut_2", &stdout),
+    );
+    assert_close(
+        summary.recall_at_k,
+        reference_value(&values, "recall_2", &stdout),
+    );
+    assert_close(
+        summary.precision_at_k,
+        reference_value(&values, "P_2", &stdout),
+    );
 }
