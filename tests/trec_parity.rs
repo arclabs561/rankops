@@ -4,11 +4,13 @@ use std::process::Command;
 
 const QRELS: &str = include_str!("fixtures/trec/parity.qrels");
 const RUN: &str = include_str!("fixtures/trec/parity.run");
+const JUDGED_ONLY_QRELS: &str = include_str!("fixtures/trec/judged_only.qrels");
+const JUDGED_ONLY_RUN: &str = include_str!("fixtures/trec/judged_only.run");
 
-fn summary() -> TrecSummary {
-    let qrels = parse_qrels(QRELS.as_bytes()).unwrap();
-    let run = parse_run(RUN.as_bytes()).unwrap();
-    evaluate_with_config(&run, &qrels, TrecEvalConfig::new(2))
+fn summary(qrels: &str, run: &str, config: TrecEvalConfig) -> TrecSummary {
+    let qrels = parse_qrels(qrels.as_bytes()).unwrap();
+    let run = parse_run(run.as_bytes()).unwrap();
+    evaluate_with_config(&run, &qrels, config)
 }
 
 fn assert_close(actual: f64, expected: f64) {
@@ -31,37 +33,22 @@ fn reference_value(values: &BTreeMap<String, f64>, measure: &str, stdout: &str) 
         .unwrap_or_else(|| panic!("trec_eval did not report {measure}; output was:\n{stdout}"))
 }
 
-#[test]
-fn checked_in_trec_parity_corpus() {
-    let summary = summary();
-    assert_eq!(summary.num_queries, 3);
-    assert_close(
-        summary.ndcg_at_k,
-        (1.0 + 2.0 / 3.0_f64.log2()) / (2.0 + 1.0 / 3.0_f64.log2()) / 3.0
-            + 1.0 / 3.0_f64.log2() / 3.0,
-    );
-    assert_close(summary.map, 0.5);
-    assert_close(summary.mrr, 0.5);
-    assert_close(summary.recall_at_k, 2.0 / 3.0);
-    assert_close(summary.precision_at_k, 0.5);
-}
-
-#[test]
-#[ignore = "requires RANKOPS_TREC_EVAL; run scripts/verify-trec-parity.sh"]
-fn reference_binary_matches_corpus() {
+fn assert_reference_matches(
+    qrels: &str,
+    qrels_path: &str,
+    run: &str,
+    run_path: &str,
+    config: TrecEvalConfig,
+    include_qrels_only: bool,
+) {
     let binary = std::env::var_os("RANKOPS_TREC_EVAL")
         .expect("RANKOPS_TREC_EVAL is required; run scripts/verify-trec-parity.sh");
-    let qrels_path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/trec/parity.qrels"
-    );
-    let run_path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/trec/parity.run"
-    );
-    let output = Command::new(binary)
+    let mut command = Command::new(binary);
+    if include_qrels_only {
+        command.arg("-c");
+    }
+    let output = command
         .args([
-            "-c",
             "-m",
             "map",
             "-m",
@@ -95,7 +82,7 @@ fn reference_binary_matches_corpus() {
             (topic == "all").then(|| (measure.to_owned(), value.parse::<f64>().unwrap()))
         })
         .collect();
-    let summary = summary();
+    let summary = summary(qrels, run, config);
     assert_reference_close(summary.map, reference_value(&values, "map", &stdout));
     assert_reference_close(summary.mrr, reference_value(&values, "recip_rank", &stdout));
     assert_reference_close(
@@ -109,5 +96,58 @@ fn reference_binary_matches_corpus() {
     assert_reference_close(
         summary.precision_at_k,
         reference_value(&values, "P_2", &stdout),
+    );
+}
+
+#[test]
+fn checked_in_trec_parity_corpus() {
+    let summary = summary(QRELS, RUN, TrecEvalConfig::new(2));
+    assert_eq!(summary.num_queries, 3);
+    assert_close(
+        summary.ndcg_at_k,
+        (1.0 + 2.0 / 3.0_f64.log2()) / (2.0 + 1.0 / 3.0_f64.log2()) / 3.0
+            + 1.0 / 3.0_f64.log2() / 3.0,
+    );
+    assert_close(summary.map, 0.5);
+    assert_close(summary.mrr, 0.5);
+    assert_close(summary.recall_at_k, 2.0 / 3.0);
+    assert_close(summary.precision_at_k, 0.5);
+}
+
+#[test]
+#[ignore = "requires RANKOPS_TREC_EVAL; run scripts/verify-trec-parity.sh"]
+fn reference_binary_matches_corpus() {
+    assert_reference_matches(
+        QRELS,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/trec/parity.qrels"
+        ),
+        RUN,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/trec/parity.run"
+        ),
+        TrecEvalConfig::new(2),
+        true,
+    );
+}
+
+#[test]
+#[ignore = "requires RANKOPS_TREC_EVAL; run scripts/verify-trec-parity.sh"]
+fn reference_binary_matches_judged_only_corpus() {
+    assert_reference_matches(
+        JUDGED_ONLY_QRELS,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/trec/judged_only.qrels"
+        ),
+        JUDGED_ONLY_RUN,
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/trec/judged_only.run"
+        ),
+        TrecEvalConfig::new(2).with_qrels_only(false),
+        false,
     );
 }
