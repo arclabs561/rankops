@@ -226,7 +226,7 @@ pub fn compare<I: Clone + Eq + Hash>(
     configs: &[(&str, FusionMethod)],
     sort_by: crate::OptimizeMetric,
 ) -> Vec<(String, PipelineMetrics)> {
-    let mut results: Vec<(String, PipelineMetrics)> = configs
+    let mut results: Vec<(String, PipelineMetrics, f32)> = configs
         .iter()
         .map(|(name, method)| {
             let fused = if runs.len() == 2 {
@@ -246,38 +246,18 @@ pub fn compare<I: Clone + Eq + Hash>(
                 hit_rate_1: crate::hit_rate(&fused, qrels, 1),
             };
 
-            (name.to_string(), metrics)
+            let score = crate::evaluate_metric(&fused, qrels, sort_by);
+            (name.to_string(), metrics, score)
         })
         .collect();
 
     // Sort by specified metric (descending)
-    results.sort_by(|a, b| {
-        let score_a = metric_value(&a.1, sort_by);
-        let score_b = metric_value(&b.1, sort_by);
-        score_b
-            .partial_cmp(&score_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    results.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
 
     results
-}
-
-fn metric_value(m: &PipelineMetrics, metric: crate::OptimizeMetric) -> f32 {
-    match metric {
-        crate::OptimizeMetric::Ndcg { k } => {
-            if k <= 5 {
-                m.ndcg_5
-            } else {
-                m.ndcg_10
-            }
-        }
-        crate::OptimizeMetric::Mrr => m.mrr,
-        crate::OptimizeMetric::Recall { .. } => m.recall_10,
-        crate::OptimizeMetric::Precision { .. } => m.precision_5,
-        crate::OptimizeMetric::Map => m.map,
-        crate::OptimizeMetric::MapAtK { .. } => m.map_10,
-        crate::OptimizeMetric::HitRate { .. } => m.hit_rate_1,
-    }
+        .into_iter()
+        .map(|(name, metrics, _)| (name, metrics))
+        .collect()
 }
 
 /// Fuse results from multiple query variations across multiple retrievers.
@@ -474,6 +454,35 @@ mod tests {
         // Sorted descending by NDCG@10
         assert!(results[0].1.ndcg_10 >= results[1].1.ndcg_10);
         assert!(results[1].1.ndcg_10 >= results[2].1.ndcg_10);
+    }
+
+    #[test]
+    fn compare_uses_the_requested_cutoff() {
+        let b = bm25();
+        let d = dense();
+        let runs: Vec<&[(&str, f32)]> = vec![&b, &d];
+        let q = qrels();
+        let configs = vec![
+            ("RRF", FusionMethod::rrf()),
+            ("CombSUM", FusionMethod::CombSum),
+        ];
+        let expected = configs
+            .iter()
+            .map(|(name, method)| {
+                (
+                    *name,
+                    crate::evaluate_metric(
+                        &method.fuse(&b, &d),
+                        &q,
+                        crate::OptimizeMetric::Ndcg { k: 50 },
+                    ),
+                )
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+            .0;
+        let actual = compare(&runs, &q, &configs, crate::OptimizeMetric::Ndcg { k: 50 });
+        assert_eq!(actual[0].0, expected);
     }
 
     #[test]

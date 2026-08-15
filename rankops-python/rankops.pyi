@@ -1,12 +1,47 @@
 """Type stubs for rankops Python bindings (PyPI package: rankops)."""
 
-from typing import List, Tuple, Optional, Literal
+from typing import List, Tuple, Optional, Literal, TypedDict
 
 __version__: str
 
 RankedList = List[Tuple[str, float]]
 MultiRankedLists = List[RankedList]
 NormalizationType = Literal["zscore", "minmax", "sum", "rank", "none"]
+
+class TrecSummary(TypedDict):
+    num_queries: int
+    k: int
+    ndcg_at_k: float
+    map: float
+    mrr: float
+    recall_at_k: float
+    precision_at_k: float
+
+class TrecQueryMetrics(TypedDict):
+    query_id: str
+    num_retrieved: int
+    num_relevant: int
+    ndcg_at_k: float
+    average_precision: float
+    reciprocal_rank: float
+    recall_at_k: float
+    precision_at_k: float
+
+class TrecEvaluation(TrecSummary):
+    queries: List[TrecQueryMetrics]
+
+def evaluate_trec(qrels: str, run: str, k: int) -> TrecSummary:
+    """Evaluate a TREC qrels/run pair with collection-level metrics.
+
+    Raises:
+        ValueError: If either input is malformed, has duplicate documents, or
+            contains a non-finite score.
+    """
+    ...
+
+def evaluate_trec_detailed(qrels: str, run: str, k: int) -> TrecEvaluation:
+    """Evaluate a TREC qrels/run pair and retain per-query metrics."""
+    ...
 
 # Configuration Classes
 

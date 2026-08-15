@@ -64,7 +64,7 @@ pub mod metrics;
 pub mod pipeline;
 /// Reranking: MaxSim/ColBERT, MMR/DPP diversity, Matryoshka, scoring, quantization.
 pub mod rerank;
-/// TREC qrels/run file parsing and collection-level (multi-query) evaluation.
+/// Validated TREC qrels/run parsing and collection-level (multi-query) evaluation.
 pub mod trec;
 /// Validation utilities for fusion results.
 pub mod validate;
@@ -1968,9 +1968,9 @@ where
 
 /// Sort scores descending and optionally truncate.
 ///
-/// Uses `total_cmp` for deterministic NaN handling (NaN sorts after valid values).
+/// Uses `total_cmp` plus an identifier-hash fallback for reproducible tie ordering.
 #[inline]
-fn finalize<I>(scores: HashMap<I, f32>, top_k: Option<usize>) -> Vec<(I, f32)> {
+fn finalize<I: Hash>(scores: HashMap<I, f32>, top_k: Option<usize>) -> Vec<(I, f32)> {
     let capacity = top_k.map(|k| k.min(scores.len())).unwrap_or(scores.len());
     let mut results = Vec::with_capacity(capacity);
     results.extend(scores);
@@ -1983,10 +1983,22 @@ fn finalize<I>(scores: HashMap<I, f32>, top_k: Option<usize>) -> Vec<(I, f32)> {
 
 /// Sort scored results in descending order.
 ///
-/// Uses `f32::total_cmp` for deterministic ordering of NaN values.
+/// Uses `f32::total_cmp` and an identifier-hash fallback for tie ordering.
 #[inline]
-fn sort_scored_desc<I>(results: &mut [(I, f32)]) {
-    results.sort_by(|a, b| b.1.total_cmp(&a.1));
+fn sort_scored_desc<I: Hash>(results: &mut [(I, f32)]) {
+    results.sort_by(|a, b| {
+        b.1.total_cmp(&a.1)
+            .then_with(|| stable_hash(&a.0).cmp(&stable_hash(&b.0)))
+    });
+}
+
+#[inline]
+fn stable_hash<T: Hash>(value: &T) -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Score normalization methods.
@@ -3676,19 +3688,19 @@ pub type Qrels<K> = std::collections::HashMap<K, u32>;
 /// NDCG@k = DCG@k / IDCG@k
 ///
 /// where:
-/// - DCG@k = Σ (2^rel_i - 1) / log2(i + 1) for i in [0, k)
+/// - DCG@k = Σ rel_i / log2(i + 1) for i in [0, k)
 /// - IDCG@k = DCG@k of the ideal ranking (sorted by relevance descending)
 pub fn ndcg_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k: usize) -> f32 {
     if qrels.is_empty() || results.is_empty() {
         return 0.0;
     }
 
-    let k = k.min(results.len());
+    let retrieved = k.min(results.len());
     let mut dcg = 0.0;
 
-    for (i, (id, _)) in results.iter().take(k).enumerate() {
+    for (i, (id, _)) in results.iter().take(retrieved).enumerate() {
         if let Some(&rel) = qrels.get(id) {
-            let gain = (2.0_f32.powi(rel as i32) - 1.0) / ((i + 2) as f32).log2();
+            let gain = rel as f32 / ((i + 2) as f32).log2();
             dcg += gain;
         }
     }
@@ -3699,7 +3711,7 @@ pub fn ndcg_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k
 
     let mut idcg = 0.0;
     for (i, &rel) in ideal_relevances.iter().take(k).enumerate() {
-        let gain = (2.0_f32.powi(rel as i32) - 1.0) / ((i + 2) as f32).log2();
+        let gain = rel as f32 / ((i + 2) as f32).log2();
         idcg += gain;
     }
 
@@ -3735,10 +3747,10 @@ pub fn recall_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>,
         return 0.0;
     }
 
-    let k = k.min(results.len());
+    let retrieved = k.min(results.len());
     let relevant_in_top_k = results
         .iter()
-        .take(k)
+        .take(retrieved)
         .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
         .count();
 
@@ -3759,10 +3771,10 @@ pub fn precision_at_k<K: Clone + Eq + Hash>(
         return 0.0;
     }
 
-    let k = k.min(results.len());
+    let retrieved = k.min(results.len());
     let relevant_in_top_k = results
         .iter()
-        .take(k)
+        .take(retrieved)
         .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
         .count();
 
@@ -3800,8 +3812,10 @@ pub fn map<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>) -> f32 
 
 /// Mean Average Precision at k (MAP@k).
 ///
-/// Like [`map`] but only considers the top-k results.
-/// Used by MTEB Reranking (MAP@10) and TREC evaluations.
+/// Like [`map`] but only credits relevant documents retrieved in the top-k.
+///
+/// Its denominator remains the full set of relevant documents, matching TREC
+/// `map_cut`; it is not an MTEB-specific metric definition.
 pub fn map_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k: usize) -> f32 {
     let total_relevant = qrels.values().filter(|&&rel| rel > 0).count();
     if total_relevant == 0 || results.is_empty() || k == 0 {
@@ -3819,9 +3833,8 @@ pub fn map_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k:
         }
     }
 
-    // Divide by min(total_relevant, k) for MAP@k — standard IR convention
-    // when k < total_relevant, we can only observe k documents
-    sum_precision / total_relevant.min(k) as f32
+    // Unretrieved relevant documents contribute zero, matching TREC map_cut.
+    sum_precision / total_relevant as f32
 }
 
 /// Hit Rate (Success@k).
@@ -5182,24 +5195,32 @@ mod tests {
 
     #[test]
     fn ndcg_at_k_formula() {
-        // Hand-computed NDCG with graded relevance using 2^rel-1 gain formula.
+        // Hand-computed NDCG with the linear-gain TREC formula.
         //
         // Ranking:  doc1(rel=2), doc2(rel=0), doc3(rel=1)
         // Ideal:    doc1(rel=2), doc3(rel=1), doc2(rel=0)
         //
-        // DCG  = (2^2-1)/log2(2) + (2^0-1)/log2(3) + (2^1-1)/log2(4)
-        //      = 3/1 + 0 + 1/2 = 3.5
-        // IDCG = (2^2-1)/log2(2) + (2^1-1)/log2(3) + (2^0-1)/log2(4)
-        //      = 3/1 + 1/1.58496 + 0 ≈ 3.0 + 0.63093 = 3.63093
-        // NDCG = 3.5 / 3.63093 ≈ 0.96394
+        // DCG  = 2/1 + 0 + 1/2 = 2.5
+        // IDCG = 2/1 + 1/1.58496 ≈ 2.63093
+        // NDCG = 2.5 / 2.63093 ≈ 0.95023
         let qrels: Qrels<&str> = HashMap::from([("doc1", 2u32), ("doc2", 0u32), ("doc3", 1u32)]);
         let results = vec![("doc1", 0.9_f32), ("doc2", 0.5), ("doc3", 0.1)];
         let ndcg = ndcg_at_k(&results, &qrels, 3);
-        let expected = 3.5_f32 / (3.0 + 1.0_f32 / 3.0_f32.log2());
+        let expected = 2.5_f32 / (2.0 + 1.0_f32 / 3.0_f32.log2());
         assert!(
             (ndcg - expected).abs() < 1e-4,
             "NDCG={ndcg} expected≈{expected}"
         );
+    }
+
+    #[test]
+    fn ndcg_counts_relevant_documents_missing_from_a_short_run() {
+        let qrels: Qrels<&str> = HashMap::from([("doc1", 1), ("doc2", 1)]);
+        let results = vec![("doc1", 1.0)];
+
+        let actual = ndcg_at_k(&results, &qrels, 2);
+        let expected = 1.0 / (1.0 + 1.0 / 3.0_f32.log2());
+        assert!((actual - expected).abs() < 1e-6);
     }
 
     #[test]
@@ -5231,8 +5252,8 @@ mod tests {
 
         assert_eq!(precision_at_k(&results, &qrels, 0), 0.0);
         assert_eq!(precision_at_k(&[], &qrels, 5), 0.0);
-        // k > results.len() clamps
-        assert!((precision_at_k(&results, &qrels, 10) - 1.0).abs() < 1e-6);
+        // Missing results count as non-relevant at the requested cutoff.
+        assert!((precision_at_k(&results, &qrels, 10) - 0.1).abs() < 1e-6);
     }
 
     #[test]
@@ -5288,6 +5309,23 @@ mod tests {
         let empty_qrels: Qrels<&str> = HashMap::new();
         let results = vec![("d1", 0.9)];
         assert_eq!(map(&results, &empty_qrels), 0.0);
+    }
+
+    #[test]
+    fn map_at_k_counts_unretrieved_relevant_documents() {
+        let qrels = HashMap::from([("d1", 1), ("d2", 1), ("d3", 1), ("d4", 1)]);
+        let results = vec![("d1", 1.0)];
+        assert!((map_at_k(&results, &qrels, 1) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fusion_ties_have_a_stable_order() {
+        let a = vec![("a", 1.0), ("b", 1.0)];
+        let b = vec![("c", 1.0), ("d", 1.0)];
+        let expected = rrf(&a, &b);
+        for _ in 0..32 {
+            assert_eq!(rrf(&a, &b), expected);
+        }
     }
 
     #[test]
