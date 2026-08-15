@@ -1,0 +1,6 @@
+# q1's submitted rank is deliberately wrong; score and document ID determine order.
+q1 Q0 a 99 1.0 parity
+q1 Q0 b 1 1.0 parity
+q1 Q0 z 2 0.5 parity
+q2 Q0 e 1 0.9 parity
+q2 Q0 d 2 0.1 parity

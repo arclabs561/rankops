@@ -89,7 +89,7 @@ let config = TrecEvalConfig::new(10).with_relevance_level(1);
 let summary = evaluate_with_config(&run, &qrels, config);
 ```
 
-`evaluate(&run, &qrels, k)` remains the short form for the default configuration. Validated `TrecRun` and `TrecQrels` values can also be built from in-memory records. The checked-in parity corpus is part of `cargo test`; with `trec_eval` installed, run `scripts/verify-trec-parity.sh` for an external comparison.
+`evaluate(&run, &qrels, k)` remains the short form for the default configuration. Validated `TrecRun` and `TrecQrels` values can also be built from in-memory records. The checked-in parity corpus is part of `cargo test`; with `trec_eval` installed, run `scripts/verify-trec-parity.sh` to compare both the default judged-only and `-c` query-coverage modes.
 
 ## Diagnostics
 
