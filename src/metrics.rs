@@ -146,6 +146,32 @@ pub fn mean_rank(ranks: &[usize]) -> f64 {
     sum / ranks.len() as f64
 }
 
+/// The relevance-to-gain transformation used by DCG and nDCG.
+///
+/// [`Linear`](Self::Linear) preserves the original rankops metric behavior and
+/// the formulation used by [`crate::trec`]. [`Exponential`](Self::Exponential)
+/// is the common alternative for graded relevance, where a one-grade increase
+/// has a larger effect at higher grades.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NdcgGain {
+    /// Use the judgment itself as its gain: `rel`.
+    #[default]
+    Linear,
+    /// Use the graded-relevance gain: `2^rel - 1`.
+    Exponential,
+}
+
+impl NdcgGain {
+    /// Transform one relevance judgment into a DCG gain.
+    #[must_use]
+    pub fn apply(self, relevance: f64) -> f64 {
+        match self {
+            Self::Linear => relevance,
+            Self::Exponential => 2.0_f64.powf(relevance) - 1.0,
+        }
+    }
+}
+
 /// Normalized Discounted Cumulative Gain (NDCG).
 ///
 /// Measures ranking quality with position-weighted relevance.
@@ -188,8 +214,17 @@ pub fn mean_rank(ranks: &[usize]) -> f64 {
 /// assert!(ndcg(&relevance, &ideal) < 1.0);
 /// ```
 pub fn ndcg(relevance: &[f64], ideal: &[f64]) -> f64 {
-    let actual_dcg = dcg(relevance);
-    let ideal_dcg = dcg(ideal);
+    ndcg_with_gain(relevance, ideal, NdcgGain::Linear)
+}
+
+/// Normalized Discounted Cumulative Gain with an explicit gain policy.
+///
+/// Use this when comparing a linear-gain evaluation with the common
+/// exponential-gain alternative. [`ndcg`] remains linear for compatibility.
+#[must_use]
+pub fn ndcg_with_gain(relevance: &[f64], ideal: &[f64], gain: NdcgGain) -> f64 {
+    let actual_dcg = dcg_with_gain(relevance, gain);
+    let ideal_dcg = dcg_with_gain(ideal, gain);
 
     if ideal_dcg == 0.0 {
         0.0
@@ -202,12 +237,18 @@ pub fn ndcg(relevance: &[f64], ideal: &[f64]) -> f64 {
 ///
 /// Helper for NDCG. Sums relevance weighted by log position.
 pub fn dcg(relevance: &[f64]) -> f64 {
+    dcg_with_gain(relevance, NdcgGain::Linear)
+}
+
+/// Discounted Cumulative Gain with an explicit relevance-to-gain policy.
+#[must_use]
+pub fn dcg_with_gain(relevance: &[f64], gain: NdcgGain) -> f64 {
     relevance
         .iter()
         .enumerate()
         .map(|(i, &rel)| {
             let position = i + 1;
-            rel / (position as f64 + 1.0).log2()
+            gain.apply(rel) / (position as f64 + 1.0).log2()
         })
         .sum()
 }
@@ -226,9 +267,15 @@ pub fn dcg(relevance: &[f64]) -> f64 {
 /// let score = ndcg_at_k(&relevance, &ideal, 3);
 /// ```
 pub fn ndcg_at_k(relevance: &[f64], ideal: &[f64], k: usize) -> f64 {
+    ndcg_at_k_with_gain(relevance, ideal, k, NdcgGain::Linear)
+}
+
+/// NDCG@k with an explicit relevance-to-gain policy.
+#[must_use]
+pub fn ndcg_at_k_with_gain(relevance: &[f64], ideal: &[f64], k: usize, gain: NdcgGain) -> f64 {
     let rel_k: Vec<f64> = relevance.iter().take(k).copied().collect();
     let ideal_k: Vec<f64> = ideal.iter().take(k).copied().collect();
-    ndcg(&rel_k, &ideal_k)
+    ndcg_with_gain(&rel_k, &ideal_k, gain)
 }
 
 /// Compute rank of a target score among all scores.
@@ -481,6 +528,20 @@ mod tests {
         let score = ndcg(&relevance, &ideal);
         assert!(score < 1.0);
         assert!(score > 0.0);
+    }
+
+    #[test]
+    fn ndcg_gain_policy_preserves_linear_and_supports_exponential() {
+        let relevance = [1.0, 3.0];
+        let ideal = [3.0, 1.0];
+
+        assert_eq!(
+            ndcg(&relevance, &ideal),
+            ndcg_with_gain(&relevance, &ideal, NdcgGain::Linear)
+        );
+        assert!(
+            ndcg_with_gain(&relevance, &ideal, NdcgGain::Exponential) < ndcg(&relevance, &ideal)
+        );
     }
 
     #[test]
