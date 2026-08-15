@@ -456,6 +456,8 @@ pub struct TrecSummary {
     pub recall_at_k: f64,
     /// Mean P@k, padding short runs with non-relevant results.
     pub precision_at_k: f64,
+    /// Mean Judged@k: the share of the top k results with any qrels judgment.
+    pub judged_at_k: f64,
 }
 
 /// Metrics for one qrels query under a [`TrecEvalConfig`].
@@ -470,6 +472,8 @@ pub struct TrecQueryMetrics {
     pub num_retrieved: usize,
     /// Number of documents meeting the configured relevance threshold.
     pub num_relevant: usize,
+    /// Number of top-k results with any qrels judgment, including judgment zero.
+    pub num_judged_at_k: usize,
     /// Linear-gain nDCG@k for this query.
     pub ndcg_at_k: f64,
     /// Average precision for this query.
@@ -480,6 +484,8 @@ pub struct TrecQueryMetrics {
     pub recall_at_k: f64,
     /// P@k for this query, padding short runs with non-relevant results.
     pub precision_at_k: f64,
+    /// Judged@k for this query, padding short runs as unjudged.
+    pub judged_at_k: f64,
 }
 
 /// A collection summary together with the per-query values that produced it.
@@ -539,16 +545,28 @@ fn metrics(
     let total = qrels.values().filter(|&&rel| relevant(rel, config)).count();
     let limit = config.max_docs_per_query.unwrap_or(usize::MAX);
     let results = &results[..results.len().min(limit)];
+    let num_judged_at_k = results
+        .iter()
+        .take(config.k)
+        .filter(|result| qrels.contains_key(&result.document_id))
+        .count();
+    let judged_at_k = if config.k == 0 {
+        0.0
+    } else {
+        num_judged_at_k as f64 / config.k as f64
+    };
     if total == 0 {
         return TrecQueryMetrics {
             query_id: query_id.to_owned(),
             num_retrieved: results.len(),
             num_relevant: 0,
+            num_judged_at_k,
             ndcg_at_k: ndcg(results, qrels, config),
             average_precision: 0.0,
             reciprocal_rank: 0.0,
             recall_at_k: 0.0,
             precision_at_k: 0.0,
+            judged_at_k,
         };
     }
     let mut seen = BTreeSet::new();
@@ -581,6 +599,7 @@ fn metrics(
         query_id: query_id.to_owned(),
         num_retrieved: results.len(),
         num_relevant: total,
+        num_judged_at_k,
         ndcg_at_k: ndcg(results, qrels, config),
         average_precision: ap / total as f64,
         reciprocal_rank: reciprocal,
@@ -590,6 +609,7 @@ fn metrics(
         } else {
             top_hits as f64 / config.k as f64
         },
+        judged_at_k,
     }
 }
 
@@ -608,6 +628,7 @@ pub fn evaluate_detailed_with_config(
         mrr: 0.0,
         recall_at_k: 0.0,
         precision_at_k: 0.0,
+        judged_at_k: 0.0,
     };
     let mut queries = Vec::new();
     let empty = Vec::new();
@@ -626,6 +647,7 @@ pub fn evaluate_detailed_with_config(
         summary.mrr += query.reciprocal_rank;
         summary.recall_at_k += query.recall_at_k;
         summary.precision_at_k += query.precision_at_k;
+        summary.judged_at_k += query.judged_at_k;
         queries.push(query);
     }
     if summary.num_queries > 0 {
@@ -635,6 +657,7 @@ pub fn evaluate_detailed_with_config(
         summary.mrr /= count;
         summary.recall_at_k /= count;
         summary.precision_at_k /= count;
+        summary.judged_at_k /= count;
     }
     TrecEvaluation { summary, queries }
 }
@@ -713,10 +736,15 @@ mod tests {
         assert_eq!(evaluation.queries[0].query_id, "q1");
         assert_eq!(evaluation.queries[0].num_retrieved, 2);
         assert_eq!(evaluation.queries[0].num_relevant, 2);
+        assert_eq!(evaluation.queries[0].num_judged_at_k, 1);
+        assert_eq!(evaluation.queries[0].judged_at_k, 1.0);
         assert_eq!(evaluation.queries[0].recall_at_k, 0.5);
         assert_eq!(evaluation.queries[1].query_id, "q2");
         assert_eq!(evaluation.queries[1].num_retrieved, 0);
         assert_eq!(evaluation.queries[1].num_relevant, 1);
+        assert_eq!(evaluation.queries[1].num_judged_at_k, 0);
+        assert_eq!(evaluation.queries[1].judged_at_k, 0.0);
+        assert_eq!(evaluation.summary.judged_at_k, 0.5);
     }
 
     #[test]

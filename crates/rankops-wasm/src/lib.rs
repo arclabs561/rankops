@@ -121,15 +121,14 @@ fn trec_summary_to_js(summary: rankops::trec::TrecSummary) -> Result<JsValue, Js
         ("mrr", JsValue::from_f64(summary.mrr)),
         ("recall_at_k", JsValue::from_f64(summary.recall_at_k)),
         ("precision_at_k", JsValue::from_f64(summary.precision_at_k)),
+        ("judged_at_k", JsValue::from_f64(summary.judged_at_k)),
     ] {
         js_sys::Reflect::set(&object, &JsValue::from_str(name), &value)?;
     }
     Ok(object.into())
 }
 
-fn trec_evaluation_to_js(
-    evaluation: rankops::trec::TrecEvaluation,
-) -> Result<JsValue, JsValue> {
+fn trec_evaluation_to_js(evaluation: rankops::trec::TrecEvaluation) -> Result<JsValue, JsValue> {
     use wasm_bindgen::JsCast;
 
     let object: js_sys::Object = trec_summary_to_js(evaluation.summary)?
@@ -140,13 +139,24 @@ fn trec_evaluation_to_js(
         let item = js_sys::Object::new();
         for (name, value) in [
             ("query_id", JsValue::from_str(&query.query_id)),
-            ("num_retrieved", JsValue::from_f64(query.num_retrieved as f64)),
+            (
+                "num_retrieved",
+                JsValue::from_f64(query.num_retrieved as f64),
+            ),
             ("num_relevant", JsValue::from_f64(query.num_relevant as f64)),
+            (
+                "num_judged_at_k",
+                JsValue::from_f64(query.num_judged_at_k as f64),
+            ),
             ("ndcg_at_k", JsValue::from_f64(query.ndcg_at_k)),
-            ("average_precision", JsValue::from_f64(query.average_precision)),
+            (
+                "average_precision",
+                JsValue::from_f64(query.average_precision),
+            ),
             ("reciprocal_rank", JsValue::from_f64(query.reciprocal_rank)),
             ("recall_at_k", JsValue::from_f64(query.recall_at_k)),
             ("precision_at_k", JsValue::from_f64(query.precision_at_k)),
+            ("judged_at_k", JsValue::from_f64(query.judged_at_k)),
         ] {
             js_sys::Reflect::set(&item, &JsValue::from_str(name), &value)?;
         }

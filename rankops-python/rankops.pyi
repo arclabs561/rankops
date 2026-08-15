@@ -16,16 +16,19 @@ class TrecSummary(TypedDict):
     mrr: float
     recall_at_k: float
     precision_at_k: float
+    judged_at_k: float
 
 class TrecQueryMetrics(TypedDict):
     query_id: str
     num_retrieved: int
     num_relevant: int
+    num_judged_at_k: int
     ndcg_at_k: float
     average_precision: float
     reciprocal_rank: float
     recall_at_k: float
     precision_at_k: float
+    judged_at_k: float
 
 class TrecEvaluation(TrecSummary):
     queries: List[TrecQueryMetrics]

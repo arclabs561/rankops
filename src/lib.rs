@@ -3678,7 +3678,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// Maps document IDs to relevance scores (typically 0=not relevant, 1=relevant, 2=highly relevant).
 pub type Qrels<K> = std::collections::HashMap<K, u32>;
 
-/// Normalized Discounted Cumulative Gain at k.
+/// Normalized Discounted Cumulative Gain at k with linear gain.
 ///
 /// Measures ranking quality by rewarding relevant documents that appear early.
 /// NDCG@k ranges from 0.0 (worst) to 1.0 (perfect).
@@ -3691,6 +3691,20 @@ pub type Qrels<K> = std::collections::HashMap<K, u32>;
 /// - DCG@k = Σ rel_i / log2(i + 1) for i in [0, k)
 /// - IDCG@k = DCG@k of the ideal ranking (sorted by relevance descending)
 pub fn ndcg_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k: usize) -> f32 {
+    ndcg_at_k_with_gain(results, qrels, k, metrics::NdcgGain::Linear)
+}
+
+/// Normalized Discounted Cumulative Gain at k with an explicit gain policy.
+///
+/// [`ndcg_at_k`] remains linear-gain for compatibility and for parity with the
+/// [`trec`] evaluator. Use [`metrics::NdcgGain::Exponential`] when a graded
+/// relevance task calls for `2^rel - 1` gain instead.
+pub fn ndcg_at_k_with_gain<K: Clone + Eq + Hash>(
+    results: &[(K, f32)],
+    qrels: &Qrels<K>,
+    k: usize,
+    gain: metrics::NdcgGain,
+) -> f32 {
     if qrels.is_empty() || results.is_empty() {
         return 0.0;
     }
@@ -3700,8 +3714,8 @@ pub fn ndcg_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k
 
     for (i, (id, _)) in results.iter().take(retrieved).enumerate() {
         if let Some(&rel) = qrels.get(id) {
-            let gain = rel as f32 / ((i + 2) as f32).log2();
-            dcg += gain;
+            let discounted_gain = gain.apply(rel as f64) as f32 / ((i + 2) as f32).log2();
+            dcg += discounted_gain;
         }
     }
 
@@ -3711,8 +3725,8 @@ pub fn ndcg_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k
 
     let mut idcg = 0.0;
     for (i, &rel) in ideal_relevances.iter().take(k).enumerate() {
-        let gain = rel as f32 / ((i + 2) as f32).log2();
-        idcg += gain;
+        let discounted_gain = gain.apply(rel as f64) as f32 / ((i + 2) as f32).log2();
+        idcg += discounted_gain;
     }
 
     if idcg > 1e-9 {
@@ -5221,6 +5235,19 @@ mod tests {
         let actual = ndcg_at_k(&results, &qrels, 2);
         let expected = 1.0 / (1.0 + 1.0 / 3.0_f32.log2());
         assert!((actual - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ndcg_gain_policy_is_explicit_and_preserves_linear_default() {
+        let qrels: Qrels<&str> = HashMap::from([("doc1", 3), ("doc2", 1)]);
+        let results = vec![("doc2", 1.0), ("doc1", 0.5)];
+
+        let linear = ndcg_at_k(&results, &qrels, 2);
+        let explicit_linear = ndcg_at_k_with_gain(&results, &qrels, 2, metrics::NdcgGain::Linear);
+        let exponential = ndcg_at_k_with_gain(&results, &qrels, 2, metrics::NdcgGain::Exponential);
+
+        assert!((linear - explicit_linear).abs() < 1e-6);
+        assert!(exponential < linear);
     }
 
     #[test]
