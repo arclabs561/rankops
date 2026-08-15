@@ -1,10 +1,10 @@
-//! Validated TREC qrels/run parsing and `trec_eval -c`-style evaluation.
+//! Validated TREC qrels/run parsing and `trec_eval`-style evaluation.
 //!
-//! This module deliberately implements only collection-level nDCG@k, MAP,
-//! reciprocal rank, recall@k, and P@k. It ignores the submitted rank, sorts by
-//! score, and treats qrels-only queries as zero-score queries.
+//! This module implements collection-level nDCG@k, MAP, reciprocal rank,
+//! recall@k, and P@k. It ignores the submitted rank, orders by score and then
+//! document ID, and uses `trec_eval -c` semantics by default.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{BufRead, BufReader, Read};
 
@@ -12,10 +12,201 @@ use std::io::{BufRead, BufReader, Read};
 pub type QueryId = String;
 /// Document identifier (TREC `doc_id` column).
 pub type DocId = String;
-/// Per-query signed relevance judgments, preserving TREC's negative values.
-pub type TrecQrels = HashMap<QueryId, HashMap<DocId, i64>>;
-/// Per-query ranked results, sorted by TREC score order.
-pub type TrecRun = HashMap<QueryId, Vec<(DocId, f32)>>;
+
+/// One in-memory qrels record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrecQrel {
+    /// Query identifier.
+    pub query_id: QueryId,
+    /// Document identifier.
+    pub document_id: DocId,
+    /// Signed relevance judgment.
+    pub relevance: i64,
+}
+
+/// One in-memory run record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrecRunEntry {
+    /// Query identifier.
+    pub query_id: QueryId,
+    /// Document identifier.
+    pub document_id: DocId,
+    /// Retrieval score.
+    pub score: f64,
+}
+
+/// A violation while constructing validated TREC data in memory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrecDataError {
+    /// A run score is not finite.
+    NonFiniteScore {
+        /// Query identifier of the invalid result.
+        query_id: QueryId,
+        /// Document identifier of the invalid result.
+        document_id: DocId,
+    },
+    /// The query/document pair was supplied more than once.
+    DuplicateDocument {
+        /// Query identifier of the duplicate.
+        query_id: QueryId,
+        /// Document identifier of the duplicate.
+        document_id: DocId,
+    },
+}
+
+impl fmt::Display for TrecDataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFiniteScore {
+                query_id,
+                document_id,
+            } => write!(
+                f,
+                "non-finite score for query {query_id}, document {document_id}"
+            ),
+            Self::DuplicateDocument {
+                query_id,
+                document_id,
+            } => write!(f, "duplicate query/document pair: {query_id}/{document_id}"),
+        }
+    }
+}
+
+impl std::error::Error for TrecDataError {}
+
+/// Validated qrels, ordered by query and document ID.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TrecQrels(BTreeMap<QueryId, BTreeMap<DocId, i64>>);
+
+impl TrecQrels {
+    /// Construct validated qrels from in-memory records.
+    pub fn from_records(
+        records: impl IntoIterator<Item = TrecQrel>,
+    ) -> Result<Self, TrecDataError> {
+        let mut judgments: BTreeMap<QueryId, BTreeMap<DocId, i64>> = BTreeMap::new();
+        for record in records {
+            let query_id = record.query_id;
+            let document_id = record.document_id;
+            if judgments
+                .entry(query_id.clone())
+                .or_default()
+                .insert(document_id.clone(), record.relevance)
+                .is_some()
+            {
+                return Err(TrecDataError::DuplicateDocument {
+                    query_id,
+                    document_id,
+                });
+            }
+        }
+        Ok(Self(judgments))
+    }
+
+    /// Number of judged queries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether there are no judged queries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Relevance judgments for `query_id`, ordered by document ID.
+    #[must_use]
+    pub fn judgments(&self, query_id: &str) -> Option<&BTreeMap<DocId, i64>> {
+        self.0.get(query_id)
+    }
+
+    /// Query IDs in deterministic order.
+    pub fn query_ids(&self) -> impl Iterator<Item = &str> {
+        self.0.keys().map(String::as_str)
+    }
+}
+
+/// One validated result in score order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrecResult {
+    document_id: DocId,
+    score: f64,
+}
+
+impl TrecResult {
+    /// Document identifier.
+    #[must_use]
+    pub fn document_id(&self) -> &str {
+        &self.document_id
+    }
+
+    /// Retrieval score used to order the result.
+    #[must_use]
+    pub fn score(&self) -> f64 {
+        self.score
+    }
+}
+
+/// Validated run, ordered by query and TREC score order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TrecRun(BTreeMap<QueryId, Vec<TrecResult>>);
+
+impl TrecRun {
+    /// Construct a validated run from in-memory records.
+    pub fn from_records(
+        records: impl IntoIterator<Item = TrecRunEntry>,
+    ) -> Result<Self, TrecDataError> {
+        let mut results: BTreeMap<QueryId, Vec<TrecResult>> = BTreeMap::new();
+        let mut seen = BTreeSet::new();
+        for record in records {
+            if !record.score.is_finite() {
+                return Err(TrecDataError::NonFiniteScore {
+                    query_id: record.query_id,
+                    document_id: record.document_id,
+                });
+            }
+            let key = (record.query_id, record.document_id);
+            if !seen.insert(key.clone()) {
+                return Err(TrecDataError::DuplicateDocument {
+                    query_id: key.0,
+                    document_id: key.1,
+                });
+            }
+            results.entry(key.0).or_default().push(TrecResult {
+                document_id: key.1,
+                score: record.score,
+            });
+        }
+        for query_results in results.values_mut() {
+            sort_results(query_results);
+        }
+        Ok(Self(results))
+    }
+
+    /// Number of queries with submitted results.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether there are no submitted results.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Results for `query_id` in deterministic score order.
+    #[must_use]
+    pub fn results(&self, query_id: &str) -> Option<&[TrecResult]> {
+        self.0.get(query_id).map(Vec::as_slice)
+    }
+
+    /// Query IDs in deterministic order.
+    pub fn query_ids(&self) -> impl Iterator<Item = &str> {
+        self.0.keys().map(String::as_str)
+    }
+}
 
 /// Why a TREC data record was rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +275,7 @@ impl fmt::Display for TrecParseError {
         }
     }
 }
+
 impl std::error::Error for TrecParseError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -99,11 +291,19 @@ fn record(line: usize, kind: &'static str, error: TrecRecordError) -> TrecParseE
     TrecParseError::Record { line, kind, error }
 }
 
+fn sort_results(results: &mut [TrecResult]) {
+    results.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| b.document_id.cmp(&a.document_id))
+    });
+}
+
 /// Parse and validate a TREC qrels file. Blank lines and full-line comments are ignored;
 /// every other line must contain exactly four whitespace-separated columns.
 pub fn parse_qrels<R: Read>(reader: R) -> ParseResult<TrecQrels> {
-    let mut out = TrecQrels::new();
-    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut out: BTreeMap<QueryId, BTreeMap<DocId, i64>> = BTreeMap::new();
+    let mut seen = BTreeMap::new();
     for (index, line) in BufReader::new(reader).lines().enumerate() {
         let line_number = index + 1;
         let line = line.map_err(TrecParseError::Io)?;
@@ -135,14 +335,14 @@ pub fn parse_qrels<R: Read>(reader: R) -> ParseResult<TrecQrels> {
         }
         out.entry(key.0).or_default().insert(key.1, relevance);
     }
-    Ok(out)
+    Ok(TrecQrels(out))
 }
 
 /// Parse and validate a TREC run file. Blank lines and full-line comments are ignored;
 /// records need six columns, while trailing columns are tolerated.
 pub fn parse_run<R: Read>(reader: R) -> ParseResult<TrecRun> {
-    let mut out = TrecRun::new();
-    let mut seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut out: BTreeMap<QueryId, Vec<TrecResult>> = BTreeMap::new();
+    let mut seen = BTreeMap::new();
     for (index, line) in BufReader::new(reader).lines().enumerate() {
         let line_number = index + 1;
         let line = line.map_err(TrecParseError::Io)?;
@@ -162,7 +362,7 @@ pub fn parse_run<R: Read>(reader: R) -> ParseResult<TrecRun> {
             ));
         }
         let score = fields[4]
-            .parse::<f32>()
+            .parse::<f64>()
             .ok()
             .filter(|score| score.is_finite())
             .ok_or_else(|| record(line_number, "run", TrecRecordError::InvalidScore))?;
@@ -174,45 +374,108 @@ pub fn parse_run<R: Read>(reader: R) -> ParseResult<TrecRun> {
                 TrecRecordError::DuplicateDocument { first_line },
             ));
         }
-        out.entry(key.0).or_default().push((key.1, score));
+        out.entry(key.0).or_default().push(TrecResult {
+            document_id: key.1,
+            score,
+        });
     }
     for results in out.values_mut() {
-        results.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+        sort_results(results);
     }
-    Ok(out)
+    Ok(TrecRun(out))
 }
 
-/// Mean metrics averaged over every qrels query (`trec_eval -c` semantics).
+/// Configuration for TREC evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TrecEvalConfig {
+    /// The cutoff used by @k metrics.
+    pub k: usize,
+    /// Minimum qrels relevance considered relevant by binary metrics.
+    pub relevance_level: i64,
+    /// Whether qrels-only queries contribute zero to collection means.
+    pub include_qrels_only: bool,
+    /// Maximum number of results used from each query (`None` means all).
+    pub max_docs_per_query: Option<usize>,
+}
+
+impl TrecEvalConfig {
+    /// Create the default `trec_eval -c`-style configuration for cutoff `k`.
+    #[must_use]
+    pub const fn new(k: usize) -> Self {
+        Self {
+            k,
+            relevance_level: 1,
+            include_qrels_only: true,
+            max_docs_per_query: None,
+        }
+    }
+
+    /// Set the minimum relevance for MAP, reciprocal rank, recall, and P@k.
+    #[must_use]
+    pub const fn with_relevance_level(mut self, relevance_level: i64) -> Self {
+        self.relevance_level = relevance_level;
+        self
+    }
+
+    /// Include or exclude qrels-only queries from collection means.
+    #[must_use]
+    pub const fn with_qrels_only(mut self, include_qrels_only: bool) -> Self {
+        self.include_qrels_only = include_qrels_only;
+        self
+    }
+
+    /// Limit the number of retrieved documents considered for each query.
+    #[must_use]
+    pub const fn with_max_docs_per_query(mut self, max_docs_per_query: Option<usize>) -> Self {
+        self.max_docs_per_query = max_docs_per_query;
+        self
+    }
+}
+
+impl Default for TrecEvalConfig {
+    fn default() -> Self {
+        Self::new(10)
+    }
+}
+
+/// Mean metrics averaged over the configured set of qrels queries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrecSummary {
-    /// Number of qrels queries in the averaging denominator.
+    /// Number of queries in the averaging denominator.
     pub num_queries: usize,
     /// The cutoff used by @k metrics.
     pub k: usize,
     /// Mean linear-gain nDCG@k.
-    pub ndcg_at_k: f32,
-    /// Mean average precision with relevance threshold 1.
-    pub map: f32,
-    /// Mean reciprocal rank with relevance threshold 1.
-    pub mrr: f32,
-    /// Mean recall@k with relevance threshold 1.
-    pub recall_at_k: f32,
+    pub ndcg_at_k: f64,
+    /// Mean average precision with the configured relevance threshold.
+    pub map: f64,
+    /// Mean reciprocal rank with the configured relevance threshold.
+    pub mrr: f64,
+    /// Mean recall@k with the configured relevance threshold.
+    pub recall_at_k: f64,
     /// Mean P@k, padding short runs with non-relevant results.
-    pub precision_at_k: f32,
+    pub precision_at_k: f64,
 }
 
-fn relevant(rel: i64) -> bool {
-    rel >= 1
+fn relevant(rel: i64, config: TrecEvalConfig) -> bool {
+    rel >= 0 && rel >= config.relevance_level.max(0)
 }
-fn gain(rel: i64) -> f32 {
-    rel.max(0) as f32
+
+fn gain(rel: i64) -> f64 {
+    rel.max(0) as f64
 }
-fn ndcg(results: &[(DocId, f32)], qrels: &HashMap<DocId, i64>, k: usize) -> f32 {
-    let dcg: f32 = results
+
+fn ndcg(results: &[TrecResult], qrels: &BTreeMap<DocId, i64>, config: TrecEvalConfig) -> f64 {
+    let limit = config.max_docs_per_query.unwrap_or(usize::MAX);
+    let dcg: f64 = results
         .iter()
-        .take(k)
+        .take(limit)
+        .take(config.k)
         .enumerate()
-        .map(|(i, (id, _))| gain(*qrels.get(id).unwrap_or(&0)) / ((i + 2) as f32).log2())
+        .map(|(i, result)| {
+            gain(*qrels.get(&result.document_id).unwrap_or(&0)) / ((i + 2) as f64).log2()
+        })
         .sum();
     let mut ideal: Vec<_> = qrels
         .values()
@@ -221,11 +484,11 @@ fn ndcg(results: &[(DocId, f32)], qrels: &HashMap<DocId, i64>, k: usize) -> f32 
         .filter(|gain| *gain > 0.0)
         .collect();
     ideal.sort_by(|a, b| b.total_cmp(a));
-    let idcg: f32 = ideal
+    let idcg: f64 = ideal
         .into_iter()
-        .take(k)
+        .take(config.k)
         .enumerate()
-        .map(|(i, value)| value / ((i + 2) as f32).log2())
+        .map(|(i, value)| value / ((i + 2) as f64).log2())
         .sum();
     if idcg == 0.0 {
         0.0
@@ -233,105 +496,193 @@ fn ndcg(results: &[(DocId, f32)], qrels: &HashMap<DocId, i64>, k: usize) -> f32 
         dcg / idcg
     }
 }
+
 fn metrics(
-    results: &[(DocId, f32)],
-    qrels: &HashMap<DocId, i64>,
-    k: usize,
-) -> (f32, f32, f32, f32, f32) {
-    let total = qrels.values().filter(|&&rel| relevant(rel)).count();
+    results: &[TrecResult],
+    qrels: &BTreeMap<DocId, i64>,
+    config: TrecEvalConfig,
+) -> (f64, f64, f64, f64, f64) {
+    let total = qrels.values().filter(|&&rel| relevant(rel, config)).count();
     if total == 0 {
-        return (ndcg(results, qrels, k), 0.0, 0.0, 0.0, 0.0);
+        return (ndcg(results, qrels, config), 0.0, 0.0, 0.0, 0.0);
     }
-    let mut seen = HashSet::new();
+    let limit = config.max_docs_per_query.unwrap_or(usize::MAX);
+    let results = &results[..results.len().min(limit)];
+    let mut seen = BTreeSet::new();
     let mut hits = 0;
     let mut ap = 0.0;
     let mut reciprocal = 0.0;
-    for (index, (id, _)) in results.iter().enumerate() {
-        if seen.insert(id) && qrels.get(id).is_some_and(|&rel| relevant(rel)) {
+    for (index, result) in results.iter().enumerate() {
+        if seen.insert(&result.document_id)
+            && qrels
+                .get(&result.document_id)
+                .is_some_and(|&rel| relevant(rel, config))
+        {
             hits += 1;
-            ap += hits as f32 / (index + 1) as f32;
+            ap += hits as f64 / (index + 1) as f64;
             if reciprocal == 0.0 {
-                reciprocal = 1.0 / (index + 1) as f32;
+                reciprocal = 1.0 / (index + 1) as f64;
             }
         }
     }
     let top_hits = results
         .iter()
-        .take(k)
-        .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| relevant(rel)))
+        .take(config.k)
+        .filter(|result| {
+            qrels
+                .get(&result.document_id)
+                .is_some_and(|&rel| relevant(rel, config))
+        })
         .count();
     (
-        ndcg(results, qrels, k),
-        ap / total as f32,
+        ndcg(results, qrels, config),
+        ap / total as f64,
         reciprocal,
-        top_hits as f32 / total as f32,
-        if k == 0 {
+        top_hits as f64 / total as f64,
+        if config.k == 0 {
             0.0
         } else {
-            top_hits as f32 / k as f32
+            top_hits as f64 / config.k as f64
         },
     )
 }
 
-/// Evaluate a run against qrels using `trec_eval -c`-style query averaging.
-pub fn evaluate(run: &TrecRun, qrels: &TrecQrels, k: usize) -> TrecSummary {
+/// Evaluate a run against qrels with a configurable TREC evaluation policy.
+#[must_use]
+pub fn evaluate_with_config(
+    run: &TrecRun,
+    qrels: &TrecQrels,
+    config: TrecEvalConfig,
+) -> TrecSummary {
     let mut summary = TrecSummary {
-        num_queries: qrels.len(),
-        k,
+        num_queries: 0,
+        k: config.k,
         ndcg_at_k: 0.0,
         map: 0.0,
         mrr: 0.0,
         recall_at_k: 0.0,
         precision_at_k: 0.0,
     };
-    if qrels.is_empty() {
-        return summary;
-    }
     let empty = Vec::new();
-    for (qid, judgments) in qrels {
-        let (n, a, m, r, p) = metrics(run.get(qid).unwrap_or(&empty), judgments, k);
+    for (query_id, judgments) in &qrels.0 {
+        let Some(results) = run
+            .0
+            .get(query_id)
+            .or_else(|| config.include_qrels_only.then_some(&empty))
+        else {
+            continue;
+        };
+        let (n, a, m, r, p) = metrics(results, judgments, config);
+        summary.num_queries += 1;
         summary.ndcg_at_k += n;
         summary.map += a;
         summary.mrr += m;
         summary.recall_at_k += r;
         summary.precision_at_k += p;
     }
-    let count = qrels.len() as f32;
-    summary.ndcg_at_k /= count;
-    summary.map /= count;
-    summary.mrr /= count;
-    summary.recall_at_k /= count;
-    summary.precision_at_k /= count;
+    if summary.num_queries > 0 {
+        let count = summary.num_queries as f64;
+        summary.ndcg_at_k /= count;
+        summary.map /= count;
+        summary.mrr /= count;
+        summary.recall_at_k /= count;
+        summary.precision_at_k /= count;
+    }
     summary
+}
+
+/// Evaluate a run with the default `trec_eval -c`-style configuration.
+#[must_use]
+pub fn evaluate(run: &TrecRun, qrels: &TrecQrels, k: usize) -> TrecSummary {
+    evaluate_with_config(run, qrels, TrecEvalConfig::new(k))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn rejects_bad_data_and_duplicates() {
         assert!(parse_qrels(b"q 0 d nope\n".as_slice()).is_err());
         assert!(parse_run(b"q Q0 d 1 NaN tag\n".as_slice()).is_err());
         assert!(parse_run(b"q Q0 d 1 1 tag\nq Q0 d 2 0 tag\n".as_slice()).is_err());
     }
+
     #[test]
-    fn ties_follow_trec_document_order() {
-        let run = parse_run(b"q Q0 a 1 1 tag\nq Q0 b 2 1 tag\n".as_slice()).unwrap();
-        assert_eq!(run["q"][0].0, "b");
+    fn ties_follow_trec_document_order_without_f32_rounding() {
+        let run = parse_run(b"q Q0 a 1 1.0000000001 tag\nq Q0 b 2 1 tag\n".as_slice()).unwrap();
+        let results = run.results("q").unwrap();
+        assert_eq!(results[0].document_id(), "a");
     }
+
     #[test]
     fn uses_trec_cutoff_and_gain_semantics() {
         let qrels = parse_qrels(b"q 0 a 2\nq 0 b 1\n".as_slice()).unwrap();
         let run = parse_run(b"q Q0 b 1 1 tag\n".as_slice()).unwrap();
         let summary = evaluate(&run, &qrels, 2);
-        let expected_ndcg = 1.0 / (2.0 + 1.0 / 3.0_f32.log2());
-        assert!((summary.ndcg_at_k - expected_ndcg).abs() < 1e-6);
-        assert!((summary.precision_at_k - 0.5).abs() < 1e-6);
+        let expected_ndcg = 1.0 / (2.0 + 1.0 / 3.0_f64.log2());
+        assert!((summary.ndcg_at_k - expected_ndcg).abs() < 1e-12);
+        assert!((summary.precision_at_k - 0.5).abs() < 1e-12);
     }
+
     #[test]
-    fn missing_qrels_query_contributes_zero() {
-        let qrels = parse_qrels(b"q1 0 a 1\nq2 0 b 1\n".as_slice()).unwrap();
+    fn config_controls_query_coverage_and_relevance_level() {
+        let qrels = parse_qrels(b"q1 0 a 1\nq2 0 b 2\n".as_slice()).unwrap();
         let run = parse_run(b"q1 Q0 a 1 1 tag\n".as_slice()).unwrap();
-        assert_eq!(evaluate(&run, &qrels, 10).map, 0.5);
+        let config = TrecEvalConfig::new(10)
+            .with_qrels_only(false)
+            .with_relevance_level(2);
+        let summary = evaluate_with_config(&run, &qrels, config);
+        assert_eq!(summary.num_queries, 1);
+        assert_eq!(summary.map, 0.0);
+    }
+
+    #[test]
+    fn in_memory_records_are_validated_and_sorted() {
+        let run = TrecRun::from_records([
+            TrecRunEntry {
+                query_id: "q".into(),
+                document_id: "a".into(),
+                score: 1.0,
+            },
+            TrecRunEntry {
+                query_id: "q".into(),
+                document_id: "b".into(),
+                score: 1.0,
+            },
+        ])
+        .unwrap();
+        assert_eq!(run.results("q").unwrap()[0].document_id(), "b");
+        assert!(TrecRun::from_records([TrecRunEntry {
+            query_id: "q".into(),
+            document_id: "a".into(),
+            score: f64::NAN,
+        }])
+        .is_err());
+        assert!(TrecQrels::from_records([
+            TrecQrel {
+                query_id: "q".into(),
+                document_id: "a".into(),
+                relevance: 1,
+            },
+            TrecQrel {
+                query_id: "q".into(),
+                document_id: "a".into(),
+                relevance: 1,
+            },
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn negative_qrels_are_never_relevant() {
+        let qrels = parse_qrels(b"q 0 unjudged -1\nq 0 judged 0\n".as_slice()).unwrap();
+        let run = parse_run(b"q Q0 unjudged 1 1 tag\n".as_slice()).unwrap();
+        let summary = evaluate_with_config(
+            &run,
+            &qrels,
+            TrecEvalConfig::new(1).with_relevance_level(-1),
+        );
+        assert_eq!(summary.precision_at_k, 0.0);
     }
 }

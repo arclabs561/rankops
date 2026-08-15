@@ -7,7 +7,7 @@
 //!
 //! Run: `cargo run --example trec_eval`
 
-use rankops::trec::{evaluate, parse_qrels, parse_run};
+use rankops::trec::{evaluate_with_config, parse_qrels, parse_run, TrecEvalConfig};
 
 // qrels: query_id  iteration  doc_id  relevance
 const QRELS: &str = "\
@@ -43,7 +43,7 @@ fn main() {
     );
 
     for k in [5, 10] {
-        let s = evaluate(&run, &qrels, k);
+        let s = evaluate_with_config(&run, &qrels, TrecEvalConfig::new(k));
         println!(
             "@{k:<2}  nDCG={:.4}  MAP={:.4}  MRR={:.4}  recall={:.4}  precision={:.4}  (over {} queries)",
             s.ndcg_at_k, s.map, s.mrr, s.recall_at_k, s.precision_at_k, s.num_queries
