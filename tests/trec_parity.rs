@@ -18,6 +18,13 @@ fn assert_close(actual: f64, expected: f64) {
     );
 }
 
+fn assert_reference_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() <= 5e-5,
+        "trec_eval prints four decimal places: expected {expected}, got {actual}"
+    );
+}
+
 fn reference_value(values: &BTreeMap<String, f64>, measure: &str, stdout: &str) -> f64 {
     *values
         .get(measure)
@@ -89,17 +96,17 @@ fn reference_binary_matches_corpus() {
         })
         .collect();
     let summary = summary();
-    assert_close(summary.map, reference_value(&values, "map", &stdout));
-    assert_close(summary.mrr, reference_value(&values, "recip_rank", &stdout));
-    assert_close(
+    assert_reference_close(summary.map, reference_value(&values, "map", &stdout));
+    assert_reference_close(summary.mrr, reference_value(&values, "recip_rank", &stdout));
+    assert_reference_close(
         summary.ndcg_at_k,
         reference_value(&values, "ndcg_cut_2", &stdout),
     );
-    assert_close(
+    assert_reference_close(
         summary.recall_at_k,
         reference_value(&values, "recall_2", &stdout),
     );
-    assert_close(
+    assert_reference_close(
         summary.precision_at_k,
         reference_value(&values, "P_2", &stdout),
     );
