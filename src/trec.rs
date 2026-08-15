@@ -458,6 +458,39 @@ pub struct TrecSummary {
     pub precision_at_k: f64,
 }
 
+/// Metrics for one qrels query under a [`TrecEvalConfig`].
+///
+/// The query order in [`TrecEvaluation::queries`] is deterministic. A query is
+/// present when it contributes to the collection summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrecQueryMetrics {
+    /// Query identifier from the qrels.
+    pub query_id: QueryId,
+    /// Number of submitted results considered after the configured document limit.
+    pub num_retrieved: usize,
+    /// Number of documents meeting the configured relevance threshold.
+    pub num_relevant: usize,
+    /// Linear-gain nDCG@k for this query.
+    pub ndcg_at_k: f64,
+    /// Average precision for this query.
+    pub average_precision: f64,
+    /// Reciprocal rank for this query.
+    pub reciprocal_rank: f64,
+    /// Recall@k for this query.
+    pub recall_at_k: f64,
+    /// P@k for this query, padding short runs with non-relevant results.
+    pub precision_at_k: f64,
+}
+
+/// A collection summary together with the per-query values that produced it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrecEvaluation {
+    /// Collection-level mean metrics.
+    pub summary: TrecSummary,
+    /// Per-query metrics in deterministic qrels query order.
+    pub queries: Vec<TrecQueryMetrics>,
+}
+
 fn relevant(rel: i64, config: TrecEvalConfig) -> bool {
     rel >= 0 && rel >= config.relevance_level.max(0)
 }
@@ -498,16 +531,26 @@ fn ndcg(results: &[TrecResult], qrels: &BTreeMap<DocId, i64>, config: TrecEvalCo
 }
 
 fn metrics(
+    query_id: &str,
     results: &[TrecResult],
     qrels: &BTreeMap<DocId, i64>,
     config: TrecEvalConfig,
-) -> (f64, f64, f64, f64, f64) {
+) -> TrecQueryMetrics {
     let total = qrels.values().filter(|&&rel| relevant(rel, config)).count();
-    if total == 0 {
-        return (ndcg(results, qrels, config), 0.0, 0.0, 0.0, 0.0);
-    }
     let limit = config.max_docs_per_query.unwrap_or(usize::MAX);
     let results = &results[..results.len().min(limit)];
+    if total == 0 {
+        return TrecQueryMetrics {
+            query_id: query_id.to_owned(),
+            num_retrieved: results.len(),
+            num_relevant: 0,
+            ndcg_at_k: ndcg(results, qrels, config),
+            average_precision: 0.0,
+            reciprocal_rank: 0.0,
+            recall_at_k: 0.0,
+            precision_at_k: 0.0,
+        };
+    }
     let mut seen = BTreeSet::new();
     let mut hits = 0;
     let mut ap = 0.0;
@@ -534,26 +577,29 @@ fn metrics(
                 .is_some_and(|&rel| relevant(rel, config))
         })
         .count();
-    (
-        ndcg(results, qrels, config),
-        ap / total as f64,
-        reciprocal,
-        top_hits as f64 / total as f64,
-        if config.k == 0 {
+    TrecQueryMetrics {
+        query_id: query_id.to_owned(),
+        num_retrieved: results.len(),
+        num_relevant: total,
+        ndcg_at_k: ndcg(results, qrels, config),
+        average_precision: ap / total as f64,
+        reciprocal_rank: reciprocal,
+        recall_at_k: top_hits as f64 / total as f64,
+        precision_at_k: if config.k == 0 {
             0.0
         } else {
             top_hits as f64 / config.k as f64
         },
-    )
+    }
 }
 
-/// Evaluate a run against qrels with a configurable TREC evaluation policy.
+/// Evaluate a run against qrels, retaining the values for each contributing query.
 #[must_use]
-pub fn evaluate_with_config(
+pub fn evaluate_detailed_with_config(
     run: &TrecRun,
     qrels: &TrecQrels,
     config: TrecEvalConfig,
-) -> TrecSummary {
+) -> TrecEvaluation {
     let mut summary = TrecSummary {
         num_queries: 0,
         k: config.k,
@@ -563,6 +609,7 @@ pub fn evaluate_with_config(
         recall_at_k: 0.0,
         precision_at_k: 0.0,
     };
+    let mut queries = Vec::new();
     let empty = Vec::new();
     for (query_id, judgments) in &qrels.0 {
         let Some(results) = run
@@ -572,13 +619,14 @@ pub fn evaluate_with_config(
         else {
             continue;
         };
-        let (n, a, m, r, p) = metrics(results, judgments, config);
+        let query = metrics(query_id, results, judgments, config);
         summary.num_queries += 1;
-        summary.ndcg_at_k += n;
-        summary.map += a;
-        summary.mrr += m;
-        summary.recall_at_k += r;
-        summary.precision_at_k += p;
+        summary.ndcg_at_k += query.ndcg_at_k;
+        summary.map += query.average_precision;
+        summary.mrr += query.reciprocal_rank;
+        summary.recall_at_k += query.recall_at_k;
+        summary.precision_at_k += query.precision_at_k;
+        queries.push(query);
     }
     if summary.num_queries > 0 {
         let count = summary.num_queries as f64;
@@ -588,7 +636,24 @@ pub fn evaluate_with_config(
         summary.recall_at_k /= count;
         summary.precision_at_k /= count;
     }
-    summary
+    TrecEvaluation { summary, queries }
+}
+
+/// Evaluate a run against qrels with a configurable TREC evaluation policy.
+#[must_use]
+pub fn evaluate_with_config(
+    run: &TrecRun,
+    qrels: &TrecQrels,
+    config: TrecEvalConfig,
+) -> TrecSummary {
+    evaluate_detailed_with_config(run, qrels, config).summary
+}
+
+/// Evaluate a run with the default `trec_eval -c`-style configuration,
+/// retaining metrics for each contributing query.
+#[must_use]
+pub fn evaluate_detailed(run: &TrecRun, qrels: &TrecQrels, k: usize) -> TrecEvaluation {
+    evaluate_detailed_with_config(run, qrels, TrecEvalConfig::new(k))
 }
 
 /// Evaluate a run with the default `trec_eval -c`-style configuration.
@@ -635,6 +700,23 @@ mod tests {
         let summary = evaluate_with_config(&run, &qrels, config);
         assert_eq!(summary.num_queries, 1);
         assert_eq!(summary.map, 0.0);
+    }
+
+    #[test]
+    fn detailed_evaluation_exposes_query_diagnostics() {
+        let qrels = parse_qrels(b"q1 0 a 1\nq1 0 b 1\nq2 0 c 1\n".as_slice()).unwrap();
+        let run = parse_run(b"q1 Q0 a 1 1 tag\nq1 Q0 z 2 0 tag\n".as_slice()).unwrap();
+        let evaluation = evaluate_detailed_with_config(&run, &qrels, TrecEvalConfig::new(1));
+
+        assert_eq!(evaluation.summary.num_queries, 2);
+        assert_eq!(evaluation.queries.len(), 2);
+        assert_eq!(evaluation.queries[0].query_id, "q1");
+        assert_eq!(evaluation.queries[0].num_retrieved, 2);
+        assert_eq!(evaluation.queries[0].num_relevant, 2);
+        assert_eq!(evaluation.queries[0].recall_at_k, 0.5);
+        assert_eq!(evaluation.queries[1].query_id, "q2");
+        assert_eq!(evaluation.queries[1].num_retrieved, 0);
+        assert_eq!(evaluation.queries[1].num_relevant, 1);
     }
 
     #[test]

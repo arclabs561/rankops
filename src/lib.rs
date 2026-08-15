@@ -1968,7 +1968,7 @@ where
 
 /// Sort scores descending and optionally truncate.
 ///
-/// Uses `total_cmp` for deterministic NaN handling (NaN sorts after valid values).
+/// Uses `total_cmp` plus an identifier-hash fallback for reproducible tie ordering.
 #[inline]
 fn finalize<I: Hash>(scores: HashMap<I, f32>, top_k: Option<usize>) -> Vec<(I, f32)> {
     let capacity = top_k.map(|k| k.min(scores.len())).unwrap_or(scores.len());
@@ -1983,7 +1983,7 @@ fn finalize<I: Hash>(scores: HashMap<I, f32>, top_k: Option<usize>) -> Vec<(I, f
 
 /// Sort scored results in descending order.
 ///
-/// Uses `f32::total_cmp` for deterministic ordering of NaN values.
+/// Uses `f32::total_cmp` and an identifier-hash fallback for tie ordering.
 #[inline]
 fn sort_scored_desc<I: Hash>(results: &mut [(I, f32)]) {
     results.sort_by(|a, b| {
@@ -3695,10 +3695,10 @@ pub fn ndcg_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k
         return 0.0;
     }
 
-    let k = k.min(results.len());
+    let retrieved = k.min(results.len());
     let mut dcg = 0.0;
 
-    for (i, (id, _)) in results.iter().take(k).enumerate() {
+    for (i, (id, _)) in results.iter().take(retrieved).enumerate() {
         if let Some(&rel) = qrels.get(id) {
             let gain = rel as f32 / ((i + 2) as f32).log2();
             dcg += gain;
@@ -3812,8 +3812,10 @@ pub fn map<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>) -> f32 
 
 /// Mean Average Precision at k (MAP@k).
 ///
-/// Like [`map`] but only considers the top-k results.
-/// Used by MTEB Reranking (MAP@10) and TREC evaluations.
+/// Like [`map`] but only credits relevant documents retrieved in the top-k.
+///
+/// Its denominator remains the full set of relevant documents, matching TREC
+/// `map_cut`; it is not an MTEB-specific metric definition.
 pub fn map_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k: usize) -> f32 {
     let total_relevant = qrels.values().filter(|&&rel| rel > 0).count();
     if total_relevant == 0 || results.is_empty() || k == 0 {
@@ -5209,6 +5211,16 @@ mod tests {
             (ndcg - expected).abs() < 1e-4,
             "NDCG={ndcg} expected≈{expected}"
         );
+    }
+
+    #[test]
+    fn ndcg_counts_relevant_documents_missing_from_a_short_run() {
+        let qrels: Qrels<&str> = HashMap::from([("doc1", 1), ("doc2", 1)]);
+        let results = vec![("doc1", 1.0)];
+
+        let actual = ndcg_at_k(&results, &qrels, 2);
+        let expected = 1.0 / (1.0 + 1.0 / 3.0_f32.log2());
+        assert!((actual - expected).abs() < 1e-6);
     }
 
     #[test]

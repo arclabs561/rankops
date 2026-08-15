@@ -75,9 +75,9 @@ let selected = mmr(&candidates, &similarity, config);
 
 ## Evaluation
 
-Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`. They expect a ranked, duplicate-free list with finite scores. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics. `optimize_fusion` is a grid-search helper; choose parameters on held-out queries before reporting final results.
+Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`. These low-level functions accept the ordering supplied by the caller; validate external lists with `validate` before evaluating. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics. `optimize_fusion` is a grid-search helper; choose parameters on held-out queries before reporting final results.
 
-The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k.
+The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k. Use `evaluate_detailed` or `evaluate_detailed_with_config` to retain deterministic per-query values and coverage counts.
 
 ```rust
 use rankops::trec::{evaluate_with_config, parse_qrels, parse_run, TrecEvalConfig};
