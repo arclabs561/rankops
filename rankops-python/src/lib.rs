@@ -156,6 +156,7 @@ fn evaluate_trec_py<'py>(
     result.set_item("mrr", summary.mrr)?;
     result.set_item("recall_at_k", summary.recall_at_k)?;
     result.set_item("precision_at_k", summary.precision_at_k)?;
+    result.set_item("judged_at_k", summary.judged_at_k)?;
     Ok(result)
 }
 
@@ -180,17 +181,20 @@ fn evaluate_trec_detailed_py<'py>(
     result.set_item("mrr", evaluation.summary.mrr)?;
     result.set_item("recall_at_k", evaluation.summary.recall_at_k)?;
     result.set_item("precision_at_k", evaluation.summary.precision_at_k)?;
+    result.set_item("judged_at_k", evaluation.summary.judged_at_k)?;
     let queries = PyList::empty(py);
     for query in evaluation.queries {
         let item = PyDict::new(py);
         item.set_item("query_id", query.query_id)?;
         item.set_item("num_retrieved", query.num_retrieved)?;
         item.set_item("num_relevant", query.num_relevant)?;
+        item.set_item("num_judged_at_k", query.num_judged_at_k)?;
         item.set_item("ndcg_at_k", query.ndcg_at_k)?;
         item.set_item("average_precision", query.average_precision)?;
         item.set_item("reciprocal_rank", query.reciprocal_rank)?;
         item.set_item("recall_at_k", query.recall_at_k)?;
         item.set_item("precision_at_k", query.precision_at_k)?;
+        item.set_item("judged_at_k", query.judged_at_k)?;
         queries.append(item)?;
     }
     result.set_item("queries", queries)?;
