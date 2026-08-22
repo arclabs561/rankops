@@ -56,9 +56,9 @@ summary = rankops.evaluate_trec(
 assert summary["ndcg_at_k"] == 1.0
 ```
 
-Both results include `judged_at_k`: the share of top-k results with any qrels
-judgment, including zero-relevance judgments. It is diagnostic only and does
-not affect the other metrics. Use `evaluate_trec_detailed` when you need the
+`evaluate_trec_detailed` also includes `judged_at_k`: the mean share of top-k
+results with any qrels judgment, including zero-relevance judgments. It is
+diagnostic only and does not affect the other metrics. Use it when you need the
 same metrics for each evaluated query, including retrieved, relevant, and
 judged-document counts.
 

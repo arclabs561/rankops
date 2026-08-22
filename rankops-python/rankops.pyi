@@ -16,7 +16,6 @@ class TrecSummary(TypedDict):
     mrr: float
     recall_at_k: float
     precision_at_k: float
-    judged_at_k: float
 
 class TrecQueryMetrics(TypedDict):
     query_id: str
@@ -31,6 +30,7 @@ class TrecQueryMetrics(TypedDict):
     judged_at_k: float
 
 class TrecEvaluation(TrecSummary):
+    judged_at_k: float
     queries: List[TrecQueryMetrics]
 
 def evaluate_trec(qrels: str, run: str, k: int) -> TrecSummary:
