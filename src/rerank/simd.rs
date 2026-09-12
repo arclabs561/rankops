@@ -8,12 +8,13 @@
 //!
 //! # Backend Selection
 //!
-//! When the `innr` feature is enabled (default), core operations (`dot`, `cosine`,
+//! When the `rerank` feature is enabled (default), core operations (`dot`, `cosine`,
 //! `norm`, `maxsim`, `maxsim_cosine`) are provided by the `innr` crate, which
 //! offers the same SIMD dispatch with a smaller, focused implementation.
 //!
-//! When `innr` is disabled, local implementations are used. Both provide
-//! identical semantics and SIMD acceleration.
+//! With `rerank` disabled, local implementations are used. The local
+//! `dot` deliberately supports the explicit [`dot_truncating`] API; the
+//! `innr` backend rejects mismatched dimensions.
 //!
 //! # AVX-512 Support
 //!
@@ -33,28 +34,28 @@
 //! - Unit-normalized embeddings avoid subnormal issues in practice
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Constants (only needed when innr feature is disabled)
+// Constants (only needed when rerank feature is disabled)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Minimum vector dimension for SIMD to be worthwhile.
 #[cfg(all(
-    not(feature = "innr"),
+    not(feature = "rerank"),
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 const MIN_DIM_SIMD: usize = 16;
 
 /// Threshold for treating a norm as "effectively zero" in cosine similarity.
-#[cfg(not(feature = "innr"))]
+#[cfg(not(feature = "rerank"))]
 const NORM_EPSILON: f32 = 1e-9;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Core operations: use innr when available, local fallback otherwise
+// Core operations: rerank always depends on innr; minimal builds use the local fallback.
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[cfg(feature = "innr")]
+#[cfg(feature = "rerank")]
 pub use innr::{cosine, dot, maxsim, maxsim_cosine, norm};
 
-#[cfg(not(feature = "innr"))]
+#[cfg(not(feature = "rerank"))]
 mod fallback {
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     use super::MIN_DIM_SIMD;
@@ -163,7 +164,7 @@ mod fallback {
     }
 }
 
-#[cfg(not(feature = "innr"))]
+#[cfg(not(feature = "rerank"))]
 pub use fallback::{cosine, dot, maxsim, maxsim_cosine, norm};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1323,11 +1324,11 @@ pub fn cosine_truncating(a: &[f32], b: &[f32]) -> f32 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Raw SIMD implementations (only needed when innr feature is disabled)
+// Raw SIMD implementations (only needed when rerank feature is disabled)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Portable dot product implementation (reference for SIMD versions).
-#[cfg(not(feature = "innr"))]
+#[cfg(not(feature = "rerank"))]
 #[allow(dead_code)] // Used by SIMD dispatch table, not called directly
 #[inline]
 #[must_use]
@@ -1335,7 +1336,7 @@ pub(crate) fn dot_portable(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
-#[cfg(all(not(feature = "innr"), target_arch = "x86_64"))]
+#[cfg(all(not(feature = "rerank"), target_arch = "x86_64"))]
 #[target_feature(enable = "avx512f")]
 unsafe fn dot_avx512(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::{
@@ -1380,7 +1381,7 @@ unsafe fn dot_avx512(a: &[f32], b: &[f32]) -> f32 {
     result
 }
 
-#[cfg(all(not(feature = "innr"), target_arch = "x86_64"))]
+#[cfg(all(not(feature = "rerank"), target_arch = "x86_64"))]
 #[target_feature(enable = "avx2", enable = "fma")]
 unsafe fn dot_avx2(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::{
@@ -1420,7 +1421,7 @@ unsafe fn dot_avx2(a: &[f32], b: &[f32]) -> f32 {
     result
 }
 
-#[cfg(all(not(feature = "innr"), target_arch = "aarch64"))]
+#[cfg(all(not(feature = "rerank"), target_arch = "aarch64"))]
 #[target_feature(enable = "neon")]
 unsafe fn dot_neon(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::{float32x4_t, vaddvq_f32, vdupq_n_f32, vfmaq_f32, vld1q_f32};

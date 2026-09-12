@@ -33,6 +33,12 @@ jobs:
       - name: test
         run: cargo test --all-targets --all-features
 
+      - name: test feature boundaries
+        run: |
+          cargo test --all-targets
+          cargo test --no-default-features --all-targets
+          cargo test --no-default-features --features rerank --all-targets
+
       - name: Verify TREC parity
         run: |
           git init /tmp/trec_eval

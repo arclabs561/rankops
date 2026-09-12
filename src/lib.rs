@@ -69,6 +69,8 @@ pub mod trec;
 /// Validation utilities for fusion results.
 pub mod validate;
 
+mod fusion_order;
+
 #[cfg(test)]
 mod proptests;
 
