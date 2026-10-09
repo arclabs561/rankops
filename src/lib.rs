@@ -390,7 +390,7 @@ pub enum FusionMethod {
     CombAnz,
     /// Rank-Biased Centroids with configurable persistence.
     Rbc {
-        /// Persistence parameter (default: 0.8). Higher = more weight to lower ranks.
+        /// Persistence parameter (default: 0.8). Higher = less top-heavy.
         persistence: f32,
     },
     /// Weighted combination with custom weights.
@@ -2116,7 +2116,7 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
                 .enumerate()
                 .map(|(i, (_, s))| (i, *s))
                 .collect();
-            indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
 
             let n = indexed.len();
             let mut quantiles = vec![0.0f32; n];
@@ -2995,16 +2995,15 @@ where
 
 /// Rank-Biased Centroids (RBC) fusion.
 ///
-/// Handles variable-length lists gracefully by using a geometric discount
-/// that depends on list length. More robust than RRF when lists have very
-/// different lengths.
+/// Weights ranks with a geometric series that does not depend on list length,
+/// so lists of different lengths contribute comparably.
 ///
-/// Formula: `score(d) = Σ (1 - p)^rank / (1 - p^N)` where:
-/// - `p` is the persistence parameter (default 0.8, higher = more top-heavy)
-/// - `N` is the list length
+/// Formula: `score(d) = Σ (1 - p) * p^rank` where:
+/// - `p` is the persistence parameter (default 0.8; higher = less top-heavy,
+///   expected inspection depth is `1 / (1 - p)`)
 /// - `rank` is 0-indexed
 ///
-/// From Bailey et al. (2017). Better than RRF when lists have different lengths.
+/// From Bailey et al. (2017), weight `(1 - φ) φ^(r-1)` at 1-indexed rank `r`.
 #[must_use]
 pub fn rbc<I: Clone + Eq + Hash>(results_a: &[(I, f32)], results_b: &[(I, f32)]) -> Vec<(I, f32)> {
     rbc_multi(&[results_a, results_b], 0.8)
@@ -3014,7 +3013,7 @@ pub fn rbc<I: Clone + Eq + Hash>(results_a: &[(I, f32)], results_b: &[(I, f32)])
 ///
 /// # Arguments
 /// * `lists` - Ranked lists to fuse
-/// * `persistence` - Persistence parameter (0.0-1.0), default 0.8. Higher = more top-heavy.
+/// * `persistence` - Persistence parameter (0.0-1.0), default 0.8. Higher = less top-heavy.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn rbc_multi<I, L>(lists: &[L], persistence: f32) -> Vec<(I, f32)>
@@ -3031,16 +3030,8 @@ where
 
     for list in lists {
         let items = list.as_ref();
-        let n = items.len() as f32;
-        let denominator = 1.0 - p.powi(n as i32);
-
         for (rank, (id, _)) in items.iter().enumerate() {
-            let numerator = (1.0 - p).powi(rank as i32);
-            let contribution = if denominator > 1e-9 {
-                numerator / denominator
-            } else {
-                0.0
-            };
+            let contribution = (1.0 - p) * p.powi(rank as i32);
 
             *scores.entry(id.clone()).or_insert(0.0) += contribution;
         }
@@ -3547,7 +3538,7 @@ where
                 let max_sim = selected
                     .iter()
                     .map(|(sel_id, _)| similarity(cand_id, sel_id))
-                    .fold(0.0_f32, f32::max);
+                    .fold(f32::NEG_INFINITY, f32::max);
                 (1.0 - lambda) * max_sim
             };
 
@@ -4819,6 +4810,76 @@ mod tests {
         assert_eq!(results[1].0, "d3");
         // d2 should be last
         assert_eq!(results[2].0, "d2");
+    }
+
+    #[test]
+    fn mmr_keeps_negative_similarity_in_redundancy_term() {
+        // Carbonell & Goldstein 1998: redundancy is max over selected of Sim2, unclamped.
+        // Normalized relevance: a=1.0, b=0.5, c=0.0. lambda=0.5, after a:
+        //   b = 0.5*0.5 - 0.5*0.5  = 0.0
+        //   c = 0.5*0.0 - 0.5*(-1) = 0.5   <- wins; clamping at 0 would tie c with b at 0.
+        let candidates = vec![("a", 1.0), ("b", 0.8), ("c", 0.6)];
+        let similarity = |x: &&str, y: &&str| -> f32 {
+            match (*x, *y) {
+                ("b", "a") | ("a", "b") => 0.5,
+                ("c", "a") | ("a", "c") => -1.0,
+                _ => 0.0,
+            }
+        };
+        let config = MmrConfig::new(0.5).with_top_k(3);
+        let results = mmr(&candidates, similarity, config);
+        assert_eq!(results[0].0, "a");
+        assert_eq!(results[1].0, "c");
+    }
+
+    #[test]
+    fn rbc_weights_follow_bailey_2017() {
+        // Bailey et al. 2017: weight at 1-indexed rank r is (1-phi) * phi^(r-1).
+        let list = vec![("a", 5.0), ("b", 4.0), ("c", 3.0), ("d", 2.0), ("e", 1.0)];
+        let fused = rbc_multi(&[list], 0.8);
+        let score = |id: &str| fused.iter().find(|(i, _)| *i == id).unwrap().1;
+        let expected = [0.2_f32, 0.16, 0.128, 0.1024, 0.08192];
+        for (id, want) in ["a", "b", "c", "d", "e"].iter().zip(expected) {
+            assert!(
+                (score(id) - want).abs() < 1e-5,
+                "{id}: {} vs {want}",
+                score(id)
+            );
+        }
+    }
+
+    #[test]
+    fn rbc_higher_persistence_is_less_top_heavy() {
+        // Expected depth is 1/(1-phi): higher persistence spreads weight deeper.
+        let list = vec![("a", 3.0), ("b", 2.0), ("c", 1.0)];
+        let ratio = |p: f32| {
+            let f = rbc_multi(std::slice::from_ref(&list), p);
+            let s = |id: &str| f.iter().find(|(i, _)| *i == id).unwrap().1;
+            s("c") / s("a")
+        };
+        assert!(ratio(0.9) > ratio(0.5));
+    }
+
+    #[test]
+    fn normalize_quantile_tolerates_nan_input() {
+        // 64 entries incl. NaN: an inconsistent comparator can panic in sort_by.
+        let results: Vec<(usize, f32)> = (0..64)
+            .map(|i| {
+                (
+                    i,
+                    if i % 5 == 0 {
+                        f32::NAN
+                    } else {
+                        ((i * 37) % 64) as f32
+                    },
+                )
+            })
+            .collect();
+        let out = normalize_scores(&results, Normalization::Quantile);
+        assert_eq!(out.len(), 64);
+        // Finite scores keep their relative order.
+        let q = |i: usize| out[i].1;
+        assert!((q(1) < q(2)) == (results[1].1 < results[2].1));
     }
 
     #[test]

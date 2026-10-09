@@ -78,7 +78,11 @@ mod fallback {
         #[cfg(target_arch = "x86_64")]
         {
             // Try AVX-512 first (Zen 5+, Ice Lake+): 16 floats per operation
-            if n >= MIN_DIM_SIMD && is_x86_feature_detected!("avx512f") {
+            // _mm512_extractf32x8_ps in dot_avx512 needs AVX-512DQ, not just F.
+            if n >= MIN_DIM_SIMD
+                && is_x86_feature_detected!("avx512f")
+                && is_x86_feature_detected!("avx512dq")
+            {
                 return unsafe { super::dot_avx512(a, b) };
             }
             // Fallback to AVX2+FMA: 8 floats per operation
@@ -1337,7 +1341,7 @@ pub(crate) fn dot_portable(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[cfg(all(not(feature = "rerank"), target_arch = "x86_64"))]
-#[target_feature(enable = "avx512f")]
+#[target_feature(enable = "avx512f,avx512dq")]
 unsafe fn dot_avx512(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::x86_64::{
         __m256, __m512, _mm256_add_ps, _mm256_castps256_ps128, _mm256_extractf128_ps,
