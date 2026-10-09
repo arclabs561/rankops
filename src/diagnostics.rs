@@ -42,7 +42,7 @@ pub fn score_stats<I>(results: &[(I, f32)]) -> Option<ScoreStats> {
     }
 
     let mut scores: Vec<f32> = results.iter().map(|(_, s)| *s).collect();
-    scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    scores.sort_by(f32::total_cmp);
 
     let count = scores.len();
     let min = scores[0];
@@ -680,6 +680,37 @@ mod tests {
             diag.suggestion,
             FusionSuggestion::FuseRecommended { .. }
         ));
+    }
+
+    /// Sorting score lists that contain NaN must not panic. Since Rust 1.81
+    /// `sort_by` may panic on a comparator that is not a total order, which
+    /// `partial_cmp(..).unwrap_or(Equal)` is not once NaN is present.
+    #[test]
+    fn score_sorts_tolerate_nan() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..50 {
+            let results: Vec<(usize, f32)> = (0..200)
+                .map(|i| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let s = if state.is_multiple_of(10) {
+                        f32::NAN
+                    } else {
+                        (state % 1000) as f32 / 1000.0
+                    };
+                    (i, s)
+                })
+                .collect();
+            let stats = score_stats(&results).unwrap();
+            assert_eq!(stats.count, 200);
+            let alignments: Vec<(usize, usize, f32)> =
+                results.iter().map(|&(i, s)| (i, i, s)).collect();
+            assert_eq!(
+                crate::rerank::simd::top_k_alignments(&alignments, 10).len(),
+                10
+            );
+        }
     }
 
     #[test]

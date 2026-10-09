@@ -35,6 +35,8 @@ Score-based fusion when scales are comparable:
 ```rust
 use rankops::combmnz;
 
+let bm25  = vec![("doc_a", 12.5), ("doc_b", 11.0), ("doc_c", 9.2)];
+let dense = vec![("doc_b", 0.95), ("doc_c", 0.88), ("doc_d", 0.70)];
 let fused = combmnz(&bm25, &dense);
 // CombMNZ: sum of normalized scores * overlap count
 ```
@@ -44,6 +46,8 @@ Select the algorithm at runtime via `FusionMethod`:
 ```rust
 use rankops::FusionMethod;
 
+let bm25  = vec![("doc_a", 12.5), ("doc_b", 11.0), ("doc_c", 9.2)];
+let dense = vec![("doc_b", 0.95), ("doc_c", 0.88), ("doc_d", 0.70)];
 let method = FusionMethod::Rrf { k: 60 };
 let result = method.fuse(&bm25, &dense);
 ```
@@ -79,7 +83,7 @@ Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_
 
 The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k. `evaluate_detailed` and `evaluate_detailed_with_config` also report Judged@k: the share of the top k results that have any qrels judgment, including zero-relevance judgments. It is diagnostic only and never changes metric denominators.
 
-```rust
+```rust,no_run
 use rankops::trec::{evaluate_with_config, parse_qrels, parse_run, TrecEvalConfig};
 use std::fs::File;
 
@@ -87,6 +91,7 @@ let qrels = parse_qrels(File::open("qrels.txt")?)?;
 let run = parse_run(File::open("run.txt")?)?;
 let config = TrecEvalConfig::new(10).with_relevance_level(1);
 let summary = evaluate_with_config(&run, &qrels, config);
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 `evaluate(&run, &qrels, k)` remains the short form for the default configuration. Validated `TrecRun` and `TrecQrels` values can also be built from in-memory records. The checked-in parity corpus is part of `cargo test`; with `trec_eval` installed, run `scripts/verify-trec-parity.sh` to compare both the default judged-only and `-c` query-coverage modes.
@@ -107,6 +112,8 @@ The `pipeline` module provides composable post-retrieval operations:
 use rankops::pipeline::Pipeline;
 use rankops::{FusionMethod, Normalization};
 
+let bm25  = vec![("doc_a", 12.5), ("doc_b", 11.0), ("doc_c", 9.2)];
+let dense = vec![("doc_b", 0.95), ("doc_c", 0.88), ("doc_d", 0.70)];
 let result = Pipeline::new()
     .add_run("bm25", &bm25)
     .add_run("dense", &dense)

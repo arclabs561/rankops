@@ -52,6 +52,11 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+/// Compiles and runs the README's Rust examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 /// Adapters for converting retriever outputs (distances, similarities, logits).
 pub mod adapt;
 /// Fusion diagnostics: complementarity, overlap, score distributions.
@@ -363,7 +368,8 @@ pub enum FusionMethod {
         /// Smoothing constant (default: 60).
         k: u32,
     },
-    /// Inverse Square Root rank fusion (gentler decay than RRF).
+    /// Inverse Square Root rank fusion (gentler decay than RRF). Not the
+    /// inverse square rank "ISR" of Mourão et al. 2014; see [`isr`].
     Isr {
         /// Smoothing constant (default: 1).
         k: u32,
@@ -404,12 +410,10 @@ pub enum FusionMethod {
     },
     /// Distribution-Based Score Fusion (z-score normalization).
     Dbsf,
-    /// Standardization-based fusion (ERANK-style).
+    /// Standardization-based fusion (z-score).
     ///
     /// Uses z-score normalization (standardization) instead of min-max normalization,
     /// then applies additive fusion. More robust to outliers and different score distributions.
-    /// Based on ERANK (arXiv:2509.00520) which shows 2-5% NDCG improvement over CombSUM
-    /// when score distributions differ significantly.
     Standardized {
         /// Clip z-scores to this range (default: [-3.0, 3.0]).
         clip_range: (f32, f32),
@@ -481,7 +485,7 @@ impl FusionMethod {
         }
     }
 
-    /// Create standardized fusion method (ERANK-style).
+    /// Create standardized fusion method (z-score).
     ///
     /// Uses z-score normalization (standardization) with clipping to prevent outliers.
     /// More robust than min-max when score distributions differ significantly.
@@ -678,7 +682,8 @@ impl FusionMethod {
 ///
 /// `RRF(d) = Σ 1/(k + rank_r(d))` where:
 /// - `k` = smoothing constant (default: 60)
-/// - `rank_r(d)` = position of document d in ranking r (0-indexed)
+/// - `rank_r(d)` = position of document d in ranking r (1-indexed: the top
+///   document has rank 1, as in Cormack, Clarke & Büttcher 2009)
 ///
 /// # Why RRF?
 ///
@@ -783,7 +788,7 @@ pub fn rrf_with_config<I: Clone + Eq + Hash>(
 
     // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
     for (rank, (id, _)) in results_a.iter().enumerate() {
-        let contribution = 1.0 / (k + rank as f32);
+        let contribution = 1.0 / (k + (rank + 1) as f32);
         if let Some(score) = scores.get_mut(id) {
             *score += contribution;
         } else {
@@ -791,7 +796,7 @@ pub fn rrf_with_config<I: Clone + Eq + Hash>(
         }
     }
     for (rank, (id, _)) in results_b.iter().enumerate() {
-        let contribution = 1.0 / (k + rank as f32);
+        let contribution = 1.0 / (k + (rank + 1) as f32);
         if let Some(score) = scores.get_mut(id) {
             *score += contribution;
         } else {
@@ -836,7 +841,7 @@ where
     // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
     for list in lists {
         for (rank, (id, _)) in list.as_ref().iter().enumerate() {
-            let contribution = 1.0 / (k + rank as f32);
+            let contribution = 1.0 / (k + (rank + 1) as f32);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -854,7 +859,7 @@ where
 /// assigning different importance to different retrievers based on domain
 /// knowledge or tuning.
 ///
-/// Formula: `score(d) = Σ w_i / (k + rank_i(d))`
+/// Formula: `score(d) = Σ w_i / (k + rank_i(d))`, with 1-indexed ranks as in [`rrf`].
 ///
 /// # Example
 ///
@@ -899,7 +904,7 @@ where
     for (list, &weight) in lists.iter().zip(weights.iter()) {
         let normalized_weight = weight / weight_sum;
         for (rank, (id, _)) in list.as_ref().iter().enumerate() {
-            let contribution = normalized_weight / (k + rank as f32);
+            let contribution = normalized_weight / (k + (rank + 1) as f32);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -924,6 +929,10 @@ where
 /// # Formula
 ///
 /// `score(d) = Σ 1/sqrt(k + rank)` where rank is 0-indexed.
+///
+/// Naming: here "ISR" means inverse square *root*. It is not the "ISR"
+/// (inverse square *rank*, `|M_d| · Σ 1/rank²`) of Mourão et al. 2014, which
+/// decays faster than RRF rather than slower.
 ///
 /// Compared to RRF's `1/(k + rank)`, ISR's `1/sqrt(k + rank)` decays more slowly,
 /// meaning rank 10 vs rank 20 has a smaller relative difference than in RRF.
@@ -1656,7 +1665,7 @@ fn zscore_params<I>(results: &[(I, f32)]) -> (f32, f32) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Standardization-Based Fusion (ERANK-style)
+// Standardization-Based Fusion (z-score)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Configuration for standardization-based fusion.
@@ -1707,13 +1716,10 @@ impl StandardizedConfig {
     }
 }
 
-/// Standardization-based fusion (ERANK-style).
+/// Standardization-based fusion (z-score).
 ///
 /// Uses z-score normalization (standardization) instead of min-max normalization,
 /// then applies additive fusion. More robust to outliers and different score distributions.
-///
-/// Based on ERANK (arXiv:2509.00520) which shows 2-5% NDCG improvement over CombSUM
-/// when score distributions differ significantly.
 ///
 /// # Algorithm
 ///
@@ -1996,9 +2002,24 @@ fn sort_scored_desc<I: Hash>(results: &mut [(I, f32)]) {
 
 #[inline]
 fn stable_hash<T: Hash>(value: &T) -> u64 {
-    use std::hash::{DefaultHasher, Hasher};
+    use std::hash::Hasher;
 
-    let mut hasher = DefaultHasher::new();
+    // FNV-1a 64. std's `DefaultHasher` algorithm is unspecified and may change
+    // between Rust releases, which would reorder tied results.
+    struct Fnv1a(u64);
+    impl Hasher for Fnv1a {
+        fn finish(&self) -> u64 {
+            self.0
+        }
+        fn write(&mut self, bytes: &[u8]) {
+            for &b in bytes {
+                self.0 ^= u64::from(b);
+                self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+
+    let mut hasher = Fnv1a(0xcbf2_9ce4_8422_2325);
     value.hash(&mut hasher);
     hasher.finish()
 }
@@ -2243,7 +2264,8 @@ pub struct SourceContribution {
     pub normalized_score: Option<f32>,
     /// How much this source contributed to the final fused score.
     ///
-    /// For RRF: `1/(k + rank)` or `weight / (k + rank)` for weighted.
+    /// For RRF: `1/(k + rank)` or `weight / (k + rank)` for weighted, with
+    /// `rank` 1-indexed (`original_rank + 1`).
     /// For CombSUM: normalized score.
     /// For CombMNZ: normalized score × overlap count.
     pub contribution: f32,
@@ -2352,7 +2374,7 @@ where
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
         for (rank, (id, original_score)) in list.as_ref().iter().enumerate() {
-            let contribution = 1.0 / (k + rank as f32);
+            let contribution = 1.0 / (k + (rank + 1) as f32);
 
             // Update score
             *scores.entry(id.clone()).or_insert(0.0) += contribution;
@@ -3478,7 +3500,10 @@ impl MmrConfig {
 ///
 /// 1. Relevance scores are normalized to `[0,1]` before MMR computation
 /// 2. First document is always the highest-relevance candidate
-/// 3. Ties broken by original relevance score
+/// 3. Ties go to the candidate that comes first in `candidates`
+/// 4. Returns each selected id with its MMR score at selection time.
+///    [`rerank::diversity::mmr`] applies the same greedy rule to a
+///    similarity matrix but returns the original relevance scores.
 ///
 /// # Performance
 ///
@@ -4088,15 +4113,45 @@ mod tests {
         let b: Vec<(&str, f32)> = vec![];
         let f = rrf_with_config(&a, &b, RrfConfig::new(60));
 
-        let expected = 1.0 / 60.0;
+        // Cormack et al. 2009: the top document has rank 1, so 1/(60+1).
+        let expected = 1.0 / 61.0;
         assert!((f[0].1 - expected).abs() < 1e-6);
+    }
+
+    /// Every RRF entry point uses 1-based ranks, so the head of a single
+    /// list scores 1/(k+1) and the second item 1/(k+2).
+    #[test]
+    fn rrf_variants_use_one_based_rank() {
+        let a = [("d1", 0.0), ("d2", 0.0)];
+        let lists = [&a[..]];
+        let expect = |f: &[(&str, f32)]| {
+            assert!((f[0].1 - 1.0 / 61.0).abs() < 1e-7, "head {}", f[0].1);
+            assert!((f[1].1 - 1.0 / 62.0).abs() < 1e-7, "second {}", f[1].1);
+        };
+        expect(&rrf_multi(&lists, RrfConfig::new(60)));
+        expect(&rrf_weighted(&lists, &[1.0], RrfConfig::new(60)).unwrap());
+        let explained = rrf_explain(&lists, &[RetrieverId::new("a")], RrfConfig::new(60));
+        assert!((explained[0].score - 1.0 / 61.0).abs() < 1e-7);
+        assert!((explained[0].explanation.sources[0].contribution - 1.0 / 61.0).abs() < 1e-7);
+    }
+
+    /// Tie order must not depend on std's unspecified `DefaultHasher`.
+    /// FNV-1a 64 over the bytes `Hash for str` feeds ("d1" then 0xff).
+    #[test]
+    fn tie_hash_is_fnv1a_and_pinned() {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in [b'd', b'1', 0xff] {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        assert_eq!(stable_hash(&"d1"), h);
     }
 
     /// Verify RRF score formula: score(d) = Σ 1/(k + rank) for all lists containing d
     #[test]
     fn rrf_exact_score_computation() {
-        // d1 at rank 0 in list A, rank 2 in list B
-        // With k=60: score = 1/(60+0) + 1/(60+2) = 1/60 + 1/62
+        // d1 at rank 1 in list A, rank 3 in list B (1-based, Cormack et al. 2009)
+        // With k=60: score = 1/(60+1) + 1/(60+3) = 1/61 + 1/63
         let a = vec![("d1", 0.9), ("d2", 0.8), ("d3", 0.7)];
         let b = vec![("d4", 0.9), ("d5", 0.8), ("d1", 0.7)];
 
@@ -4104,7 +4159,7 @@ mod tests {
 
         // Find d1's score
         let d1_score = f.iter().find(|(id, _)| *id == "d1").unwrap().1;
-        let expected = 1.0 / 60.0 + 1.0 / 62.0; // rank 0 in A + rank 2 in B
+        let expected = 1.0 / 61.0 + 1.0 / 63.0; // rank 1 in A + rank 3 in B
 
         assert!(
             (d1_score - expected).abs() < 1e-6,
@@ -4171,8 +4226,8 @@ mod tests {
         assert_eq!(f[0].0, "d2", "weighted RRF should favor higher-weight list");
 
         // Verify score formula: w / (k + rank)
-        // d1: 0.25 / 60 = 0.00417
-        // d2: 0.75 / 60 = 0.0125
+        // d1: 0.25 / 61 = 0.00410
+        // d2: 0.75 / 61 = 0.0123
         let d1_score = f.iter().find(|(id, _)| *id == "d1").unwrap().1;
         let d2_score = f.iter().find(|(id, _)| *id == "d2").unwrap().1;
         assert!(
@@ -4444,7 +4499,7 @@ mod tests {
         let f = rrf_with_config(&a, &b, RrfConfig::new(60));
 
         assert_eq!(f.len(), 1);
-        let expected = 1.0 / 60.0 + 1.0 / 61.0;
+        let expected = 1.0 / 61.0 + 1.0 / 62.0;
         assert!((f[0].1 - expected).abs() < 1e-6);
     }
 
@@ -4672,10 +4727,10 @@ mod tests {
 
         let f = rrf(&a, &b);
         // All items appear in both lists, so all have same total RRF score
-        // d2 at rank 1 in both gets: 2 * 1/(60+1) = 2/61
-        // d1 at rank 0,2 gets: 1/60 + 1/62
-        // d3 at rank 2,0 gets: 1/62 + 1/60
-        // d1 and d3 tie, d2 is slightly lower (rank 1+1 vs 0+2)
+        // d2 at rank 2 in both gets: 2 * 1/(60+2) = 2/62
+        // d1 at ranks 1,3 gets: 1/61 + 1/63
+        // d3 at ranks 3,1 gets: 1/63 + 1/61
+        // d1 and d3 tie, d2 is slightly lower (rank 2+2 vs 1+3)
         // Just check we get all 3
         assert_eq!(f.len(), 3);
     }

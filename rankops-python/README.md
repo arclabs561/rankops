@@ -34,9 +34,9 @@ bm25 = [("doc_1", 87.5), ("doc_2", 82.3), ("doc_3", 78.1)]
 # Dense embedding results (semantic search)
 dense = [("doc_2", 0.92), ("doc_1", 0.88), ("doc_4", 0.85)]
 
-# RRF finds consensus: doc_2 appears high in both lists
+# RRF finds consensus: doc_1 and doc_2 appear high in both lists
 fused = rankops.rrf(bm25, dense, k=60)
-# [("doc_2", 0.033), ("doc_1", 0.032), ("doc_3", 0.016), ("doc_4", 0.016)]
+# doc_1 and doc_2 tie at 1/61 + 1/62 = 0.033; doc_3 and doc_4 get 1/63 = 0.016
 ```
 
 **Why RRF?** BM25 scores are 0-100, dense scores are 0-1. RRF ignores scores and uses only rank positions, so no normalization needed.
@@ -80,7 +80,7 @@ fused = rankops.rrf_multi([bm25, dense, sparse], k=60, top_k=10)
 
 **When to use**: Different score scales (BM25: 0-100, dense: 0-1), zero-configuration needs.
 
-#### ISR (Inverse Square Rank)
+#### ISR (Inverse Square Root rank)
 
 ```python
 fused = rankops.isr(bm25, dense, k=1, top_k=10)

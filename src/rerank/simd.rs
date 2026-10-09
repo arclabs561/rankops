@@ -688,7 +688,7 @@ pub fn top_k_alignments(alignments: &[(usize, usize, f32)], k: usize) -> Vec<(us
         return Vec::new();
     }
     let mut sorted: Vec<_> = alignments.to_vec();
-    sorted.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| b.2.total_cmp(&a.2));
     sorted.into_iter().take(k).collect()
 }
 
@@ -1739,10 +1739,8 @@ mod tests {
         let query: Vec<&[f32]> = vec![&q1, &q2];
         let doc: Vec<&[f32]> = vec![&d1];
 
-        // NaN in input may propagate to NaN or Inf, but should not panic
-        let score = maxsim(&query, &doc);
-        // Score should be finite or NaN, but not panic
-        assert!(score.is_finite() || score.is_nan() || score.is_infinite());
+        // NaN in input may propagate to the score; the only contract is no panic.
+        let _ = maxsim(&query, &doc);
     }
 
     #[test]

@@ -295,7 +295,9 @@ pub mod tuning {
 ///
 /// # Returns
 ///
-/// Selected documents in MMR order (most relevant diverse first).
+/// Selected documents in MMR order (most relevant diverse first), each with
+/// its original relevance score. [`crate::mmr`] applies the same rule through
+/// a similarity function and returns the MMR score instead.
 ///
 /// # Complexity
 ///

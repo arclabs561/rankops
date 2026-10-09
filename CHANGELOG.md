@@ -6,6 +6,8 @@
 - Fusion output has a deterministic fallback order for equal scores.
 
 ### Changed
+- RRF (`rrf`, `rrf_multi`, `rrf_weighted`, `rrf_explain`, `FusionMethod::Rrf`) uses 1-based ranks as in Cormack et al. 2009, so the top document scores `1/(k+1)`; fused scores change for every caller.
+- Tie ordering hashes ids with FNV-1a instead of std's unspecified `DefaultHasher`, so it no longer depends on the Rust version.
 - `trec` now stores validated qrels and runs in opaque, deterministic containers; add `TrecQrels::from_records` and `TrecRun::from_records` for in-memory input.
 - Add `TrecEvalConfig` and `evaluate_with_config` for relevance thresholds, qrels-only-query handling, and per-query result limits. TREC calculations now use `f64` scores and aggregates.
 
