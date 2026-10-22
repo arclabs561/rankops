@@ -9,6 +9,9 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+- Hybrid-search example now reports fixture-specific metrics and includes a
+  synthetic two-query comparison of best-single, qrels-informed per-query
+  oracle, and RRF scores. No library API changed.
 - Evaluation helpers now use linear-gain nDCG, pad P@k for short runs, and use the full relevant set as the MAP@k denominator; `pipeline::compare` evaluates the exact requested metric/cutoff.
 - Fusion output has a deterministic fallback order for equal scores.
 
