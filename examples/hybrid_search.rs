@@ -234,8 +234,82 @@ fn main() {
     println!("\n--- Summary ---\n");
     println!("Key findings:");
     println!("  - Dense retriever found docs BM25 missed (learning_rate_paper, relu_paper)");
-    println!("  - Fusion improved recall over any single retriever");
-    println!("  - Score-based fusion (CombSUM) outperformed rank-based (RRF)");
-    println!("  - Normalization matters: Quantile > MinMax for mixed score distributions");
+    println!("  - Sparse already had R@10=1.000; three-way fusion matched it on this fixture");
+    println!("  - Two-way RRF beat CombSUM on NDCG@5 and MAP here; both had R@10=1.000");
+    println!("  - Three-way CombSUM+Quantile had MAP=1.000 vs MinMax=0.9821; NDCG@5 and R@10 tied");
     println!("  - The adapt module converted vicinity distances to scores automatically");
+
+    println!();
+    per_query_oracle_demo();
+}
+
+struct QueryCase {
+    query: &'static str,
+    qrels: Qrels<&'static str>,
+    bm25: Vec<(&'static str, f32)>,
+    dense: Vec<(&'static str, f32)>,
+}
+
+/// Compare one fixed retriever with an ideal per-query selector on explicit
+/// synthetic cases. The oracle uses qrels and is not an online routing method.
+fn per_query_oracle_demo() {
+    let cases = [
+        QueryCase {
+            query: "q1",
+            qrels: HashMap::from([("a", 1)]),
+            bm25: vec![("a", 10.0), ("x", 9.0), ("y", 8.0)],
+            dense: vec![("x", 0.9), ("y", 0.8), ("a", 0.7)],
+        },
+        QueryCase {
+            query: "q2",
+            qrels: HashMap::from([("b", 1)]),
+            bm25: vec![("x", 10.0), ("y", 9.0), ("b", 8.0)],
+            dense: vec![("b", 0.9), ("x", 0.8), ("y", 0.7)],
+        },
+    ];
+
+    let mut bm25_total = 0.0;
+    let mut dense_total = 0.0;
+    let mut oracle_total = 0.0;
+    let mut rrf_total = 0.0;
+
+    println!("=== Synthetic Per-Query Oracle Comparison (NDCG@1) ===");
+    println!(
+        "{:8} {:>8} {:>8} {:>8} {:>8}",
+        "Query", "BM25", "Dense", "Oracle", "RRF"
+    );
+
+    for case in &cases {
+        let bm25_score = ndcg_at_k(&case.bm25, &case.qrels, 1);
+        let dense_score = ndcg_at_k(&case.dense, &case.qrels, 1);
+        let oracle_score = bm25_score.max(dense_score);
+        let fused = FusionMethod::rrf().fuse(&case.bm25, &case.dense);
+        let rrf_score = ndcg_at_k(&fused, &case.qrels, 1);
+
+        bm25_total += bm25_score;
+        dense_total += dense_score;
+        oracle_total += oracle_score;
+        rrf_total += rrf_score;
+
+        println!(
+            "{query:8} {bm25_score:>8.3} {dense_score:>8.3} {oracle_score:>8.3} {rrf_score:>8.3}",
+            query = case.query,
+        );
+    }
+
+    let query_count = cases.len() as f32;
+    let best_single = bm25_total.max(dense_total) / query_count;
+    println!(
+        "{:8} {:>8.3} {:>8.3} {:>8.3} {:>8.3}",
+        "Mean",
+        bm25_total / query_count,
+        dense_total / query_count,
+        oracle_total / query_count,
+        rrf_total / query_count,
+    );
+    println!(
+        "Best single mean (selected once): {best_single:.3}. Oracle mean (selects using qrels): {:.3}.",
+        oracle_total / query_count
+    );
+    println!("The oracle is label-informed and only bounds these fixtures; it does not establish an achievable routing payoff.");
 }
