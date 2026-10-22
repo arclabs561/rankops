@@ -247,6 +247,13 @@ pub mod tuning {
     /// # Returns
     ///
     /// Selected documents using adaptive lambda strategy.
+    /// Relevance is normalized over the original candidates; each step penalizes
+    /// similarity to all earlier selections. Returned scores are the original
+    /// relevance scores. Duplicate IDs are selected at most once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the matrix is not n×n when candidates and `k` are nonempty.
     #[must_use]
     pub fn mmr_adaptive<I: Clone + Eq>(
         candidates: &[(I, f32)],
@@ -255,26 +262,65 @@ pub mod tuning {
         final_lambda: f32,
         k: usize,
     ) -> Vec<(I, f32)> {
-        let mut selected = Vec::new();
-        let mut remaining: Vec<(I, f32)> = candidates.to_vec();
+        let n = candidates.len();
+        if n == 0 || k == 0 {
+            return Vec::new();
+        }
+        assert_eq!(similarity.len(), n * n, "similarity matrix must be n×n");
 
-        for step in 0..k.min(remaining.len()) {
-            // Linear decay from initial to final lambda
-            let progress = step as f32 / (k - 1).max(1) as f32;
-            let lambda = initial_lambda + (final_lambda - initial_lambda) * progress;
+        // Keep original indices: both the matrix and earlier selections refer
+        // to the full candidate set throughout the adaptive schedule.
+        let (rel_min, rel_max) = candidates
+            .iter()
+            .map(|(_, score)| *score)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), score| {
+                (lo.min(score), hi.max(score))
+            });
+        let rel_range = rel_max - rel_min;
+        let mut selected_indices: Vec<usize> = Vec::new();
+        let mut remaining: Vec<usize> = (0..n).collect();
 
-            let config = MmrConfig::new(lambda, 1);
-            let step_selected = mmr(&remaining, similarity, config);
-
-            if let Some((id, score)) = step_selected.first() {
-                selected.push((id.clone(), *score));
-                remaining.retain(|(rid, _)| rid != id);
-            } else {
+        for step in 0..k.min(n) {
+            if remaining.is_empty() {
                 break;
             }
+            // Linear decay from initial to final lambda.
+            let progress = step as f32 / (k - 1).max(1) as f32;
+            let lambda = MmrConfig::new(
+                initial_lambda + (final_lambda - initial_lambda) * progress,
+                1,
+            )
+            .lambda;
+            let mut best_idx = remaining[0];
+            let mut best_score = f32::NEG_INFINITY;
+            for &idx in &remaining {
+                let relevance = if rel_range > 1e-9 {
+                    (candidates[idx].1 - rel_min) / rel_range
+                } else {
+                    1.0
+                };
+                let max_sim = if selected_indices.is_empty() {
+                    0.0
+                } else {
+                    selected_indices
+                        .iter()
+                        .map(|&selected| similarity[idx * n + selected])
+                        .fold(f32::NEG_INFINITY, f32::max)
+                };
+                let score = lambda * relevance - (1.0 - lambda) * max_sim;
+                if score > best_score {
+                    best_score = score;
+                    best_idx = idx;
+                }
+            }
+            selected_indices.push(best_idx);
+            remaining.retain(|&idx| candidates[idx].0 != candidates[best_idx].0);
         }
 
-        selected
+        selected_indices
+            .into_iter()
+            .map(|idx| candidates[idx].clone())
+            .collect()
     }
 }
 

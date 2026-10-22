@@ -1,5 +1,12 @@
 # Changelog
 
+## Source history (release attribution not established)
+
+These source changes are listed without assigning them to a published release.
+
+- Adaptive MMR preserves original candidate indices and diversity penalties from all earlier selections, avoiding the second-selection panic while retaining original relevance scores.
+  ([source change](https://github.com/arclabs561/rankops/commit/cd0f282dd75008b4449ebbcb8e9cf2c6a29dcb4b))
+
 ## [Unreleased]
 
 - Evaluation helpers now use linear-gain nDCG, pad P@k for short runs, and use the full relevant set as the MAP@k denominator; `pipeline::compare` evaluates the exact requested metric/cutoff.
