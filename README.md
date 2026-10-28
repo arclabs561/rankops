@@ -30,7 +30,7 @@ let fused = rrf(&bm25, &dense);
 assert_eq!(fused[0].0, "doc_b");
 ```
 
-Score-based fusion when scales are comparable:
+CombMNZ normalizes each list to `[0, 1]`, then rewards documents found in both:
 
 ```rust
 use rankops::combmnz;
@@ -75,11 +75,25 @@ let selected = mmr(&candidates, &similarity, config);
 
 ## Fusion algorithms
 
-15 fusion methods: rank-based (`rrf`, `isr`, `borda`, `condorcet`, `copeland`, `median_rank`) and score-based (`combsum`, `combmnz`, `combmax`, `combmin`, `combmed`, `combanz`, `weighted`, `dbsf`, `standardized`). All two-list functions have `*_multi` variants for 3+ lists. Explainability variants (`rrf_explain`, `combsum_explain`, etc.) return full provenance. Score normalization via `Normalization` enum (MinMax, ZScore, Quantile, Sigmoid, Sum, Rank).
+Fusion methods fall into two groups:
+
+- Rank-based: `rrf`, `isr`, `borda`, `condorcet`, `copeland`, `median_rank`.
+- Score-based: `combsum`, `combmnz`, `combmax`, `combmin`, `combmed`, `combanz`,
+  `weighted`, `dbsf`, `standardized`.
+
+Use `*_multi` variants for three or more lists. Explainability variants such as
+`rrf_explain` return each retriever's contribution. The `Normalization` enum
+selects how scores are scaled; see the [API reference](https://docs.rs/rankops).
 
 ## Evaluation
 
-Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`. `ndcg_at_k` uses linear gain; use `ndcg_at_k_with_gain` and `metrics::NdcgGain::Exponential` when your graded-relevance task calls for `2^rel - 1` instead. These low-level functions accept the ordering supplied by the caller; validate external lists with `validate` before evaluating. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics. `optimize_fusion` is a grid-search helper; choose parameters on held-out queries before reporting final results.
+Metrics for one ranked list: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`.
+
+`ndcg_at_k` uses linear gain; use `ndcg_at_k_with_gain` and `metrics::NdcgGain::Exponential` when your graded-relevance task calls for `2^rel - 1` instead.
+
+These low-level functions accept the ordering supplied by the caller; validate external lists with `validate` before evaluating. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics.
+
+`optimize_fusion` searches a grid of parameter values; choose parameters on held-out queries before reporting final results.
 
 The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k. `evaluate_detailed` and `evaluate_detailed_with_config` also report Judged@k: the share of the top k results that have any qrels judgment, including zero-relevance judgments. It is diagnostic only and never changes metric denominators.
 
