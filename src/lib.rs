@@ -1558,8 +1558,9 @@ where
 ///
 /// For each list:
 /// 1. Compute mean (μ) and standard deviation (σ)
-/// 2. Normalize: `z = (score - μ) / σ`, clipped to [-3, 3]
-/// 3. Sum normalized z-scores across lists
+/// 2. Normalize: `(score - (μ - 3σ)) / 6σ`, clipped to [0, 1] (the z-score
+///    clipped to [-3, 3] and shifted so the list's floor maps to 0)
+/// 3. Sum normalized scores across lists; a document absent from a list gets 0
 ///
 /// The ±3σ clipping prevents extreme outliers from dominating the fusion.
 ///
@@ -1570,8 +1571,8 @@ where
 ///
 /// # Returns
 ///
-/// Fused ranking sorted by combined z-score (descending). Documents with
-/// consistently high z-scores across lists rank highest.
+/// Fused ranking sorted by combined normalized score (descending). Because an
+/// absent document contributes 0, appearing in more lists raises the score.
 ///
 /// # Example
 ///
@@ -1585,8 +1586,9 @@ where
 /// let dense = vec![("d2", 0.9), ("d3", 0.7), ("d4", 0.5)];
 ///
 /// let fused = dbsf(&bm25, &dense);
-/// // Z-scores normalize both lists to comparable scales
 /// // d2 and d3 appear in both lists, so they rank highest
+/// let order: Vec<&str> = fused.iter().map(|(d, _)| *d).collect();
+/// assert_eq!(order, ["d2", "d3", "d1", "d4"]);
 /// ```
 ///
 /// # Performance
@@ -1617,7 +1619,8 @@ where
 ///
 /// - DBSF uses fixed [-3, 3] clipping
 /// - Standardized allows configurable clipping range
-/// - Both use the same z-score approach
+/// - Standardized sums raw z-scores, so an absent document counts as the
+///   list mean; DBSF shifts to [0, 1], so an absent document counts as the floor
 #[must_use]
 pub fn dbsf<I: Clone + Eq + Hash>(results_a: &[(I, f32)], results_b: &[(I, f32)]) -> Vec<(I, f32)> {
     dbsf_with_config(results_a, results_b, FusionConfig::default())
@@ -1634,19 +1637,35 @@ pub fn dbsf_with_config<I: Clone + Eq + Hash>(
 }
 
 /// DBSF for 3+ result lists.
-///
-/// Delegates to [`standardized_multi`] with the DBSF default clip range [-3, 3].
 #[must_use]
 pub fn dbsf_multi<I, L>(lists: &[L], config: FusionConfig) -> Vec<(I, f32)>
 where
     I: Clone + Eq + Hash,
     L: AsRef<[(I, f32)]>,
 {
-    let std_config = StandardizedConfig {
-        clip_range: (-3.0, 3.0),
-        top_k: config.top_k,
-    };
-    standardized_multi(lists, std_config)
+    let estimated_size: usize = lists.iter().map(|l| l.as_ref().len()).sum();
+    let mut scores: HashMap<I, f32> = HashMap::with_capacity(estimated_size);
+    for list in lists {
+        let items = list.as_ref();
+        let (mean, std) = zscore_params(items);
+        for (id, s) in items {
+            *scores.entry(id.clone()).or_insert(0.0) += dbsf_normalize(*s, mean, std);
+        }
+    }
+    finalize(scores, config.top_k)
+}
+
+/// Map a score into [0, 1] by its list's `[μ - 3σ, μ + 3σ]` range.
+///
+/// A constant list (σ = 0) maps to 0.5, the midpoint, so presence still
+/// counts for more than absence (0).
+#[inline]
+fn dbsf_normalize(score: f32, mean: f32, std: f32) -> f32 {
+    if std > SCORE_RANGE_EPSILON {
+        ((score - mean) / std).clamp(-3.0, 3.0) / 6.0 + 0.5
+    } else {
+        0.5
+    }
 }
 
 /// Compute mean and standard deviation for z-score normalization.
@@ -1698,8 +1717,9 @@ impl StandardizedConfig {
 
     /// DBSF preset: z-score normalization with [-3, 3] clipping.
     ///
-    /// Equivalent to `StandardizedConfig::default()`. DBSF (Distribution-Based Score Fusion)
-    /// is standardized fusion with the conventional 3-sigma clip range.
+    /// Equivalent to `StandardizedConfig::default()`: the 3-sigma clip range that
+    /// DBSF (Distribution-Based Score Fusion) uses. [`dbsf`] additionally shifts
+    /// clipped z-scores into [0, 1] so absent documents score lowest.
     #[must_use]
     pub const fn dbsf() -> Self {
         Self {
@@ -2745,11 +2765,7 @@ where
         let (mean, std) = zscore_params(items);
 
         for (rank, (id, original_score)) in items.iter().enumerate() {
-            let z = if std > SCORE_RANGE_EPSILON {
-                ((original_score - mean) / std).clamp(-3.0, 3.0)
-            } else {
-                0.0
-            };
+            let z = dbsf_normalize(*original_score, mean, std);
             let contribution = z;
 
             *scores.entry(id.clone()).or_insert(0.0) += contribution;
@@ -4673,10 +4689,10 @@ mod tests {
         let a = vec![("d1", 1.0), ("d2", 1.0), ("d3", 1.0)];
         let b = vec![("d1", 0.9), ("d2", 0.5), ("d3", 0.1)];
 
-        // Should not panic, list a contributes z-score=0.0 for all
+        // Should not panic, list a contributes the midpoint 0.5 for all
         let f = dbsf(&a, &b);
         assert_eq!(f.len(), 3);
-        // d1 should win (0.0 + positive z-score from b)
+        // d1 should win (0.5 + highest normalized score from b)
         assert_eq!(f[0].0, "d1");
     }
 

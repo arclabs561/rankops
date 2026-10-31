@@ -226,13 +226,13 @@ pub fn dp_topk_with_grad(scores: &[f32], k: usize, temperature: f32) -> (Vec<f32
 /// ```rust
 /// use rankops::dp_topk::dp_knapsack;
 ///
-/// let scores = vec![6.0, 5.0, 4.0, 3.0];
+/// let scores = vec![7.0, 5.0, 4.0, 3.0];
 /// let weights = vec![3, 2, 2, 1];
 /// let capacity = 4;
 /// let sel = dp_knapsack(&scores, &weights, capacity, 0.1);
-/// // Best: items 1 (score=5, w=2) + 3 (score=3, w=1) = 8, weight=3
-/// // or item 0 (score=6, w=3) + item 3 (score=3, w=1) = 9, weight=4
-/// assert!(sel[0] > 0.5); // high-value item selected
+/// // Best: item 0 (score=7, w=3) + item 3 (score=3, w=1) = 10, weight=4,
+/// // ahead of items 1 + 2 = 9
+/// assert!(sel[0] > 0.5 && sel[3] > 0.5);
 /// ```
 pub fn dp_knapsack(
     scores: &[f32],
@@ -283,8 +283,8 @@ pub fn dp_knapsack(
         log_sum_exp(&vals, temperature)
     };
 
-    // Backward DP: w_back[i][c] = smooth-max of completing the knapsack using items i..n
-    // with remaining capacity = capacity - c.
+    // Backward DP: w_back[i][c] = smooth-max over ways to complete the knapsack with
+    // items i+1..=n (1-based) when capacity c is already used.
     let mut w_back = vec![vec![f32::NEG_INFINITY; capacity + 1]; n + 1];
     for val in w_back[n].iter_mut().take(capacity + 1) {
         *val = 0.0;
@@ -294,16 +294,13 @@ pub fn dp_knapsack(
         let s = scores[i - 1];
         let w = weights[i - 1];
         for c in 0..=capacity {
-            let cur = w_back[i][c];
-            if cur == f32::NEG_INFINITY {
-                continue;
-            }
-            // Skip: propagate to w_back[i-1][c]
-            w_back[i - 1][c] = smooth_max(w_back[i - 1][c], cur, temperature);
-            // Pick: propagate to w_back[i-1][c + w] if within capacity
-            if c + w <= capacity {
-                w_back[i - 1][c + w] = smooth_max(w_back[i - 1][c + w], cur + s, temperature);
-            }
+            let skip = w_back[i][c];
+            let pick = if c + w <= capacity {
+                w_back[i][c + w] + s
+            } else {
+                f32::NEG_INFINITY
+            };
+            w_back[i - 1][c] = smooth_max(skip, pick, temperature);
         }
     }
 
@@ -461,11 +458,12 @@ mod tests {
 
     #[test]
     fn knapsack_basic() {
-        let scores = vec![6.0, 5.0, 4.0, 3.0];
+        let scores = vec![7.0, 5.0, 4.0, 3.0];
         let weights = vec![3, 2, 2, 1];
         let capacity = 4;
         let sel = dp_knapsack(&scores, &weights, capacity, 0.1);
-        // Best: item 0 (score=6, w=3) + item 3 (score=3, w=1) = 9, weight=4
+        // Best: item 0 (score=7, w=3) + item 3 (score=3, w=1) = 10, weight=4.
+        // With 6.0, items 1 + 2 tie at 9 and each marginal is 0.5.
         assert!(sel[0] > 0.5, "item 0 should be selected, got {}", sel[0]);
         assert!(sel[3] > 0.5, "item 3 should be selected, got {}", sel[3]);
     }
