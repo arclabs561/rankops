@@ -9,6 +9,13 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+- `adapt::from_distances` and `from_distances_mapped` keep negative distances
+  in best-first order. They mapped every distance through `1 / (1 + d)`,
+  which reverses order across `d = -1` and divides by zero at it, so
+  vicinity's inner-product distances (`-dot`) came back scrambled and an
+  exact unit-vector match scored infinity, then NaN after CombSUM. Negative
+  distances now map to `1 - d`, which meets `1 / (1 + d)` at zero with the
+  same slope; scores for non-negative distances are unchanged.
 - `dbsf`, `dbsf_with_config`, `dbsf_multi` and `dbsf_explain` map each list to
   `(s - (mu - 3 sigma)) / (6 sigma)` clipped to [0, 1] before summing, as in
   Mazzeschi's DBSF, so a document missing from a list counts as that list's
