@@ -49,7 +49,7 @@
 //! fusion (`CombSUM`), but ~1-2% faster. RRF excels when score scales are
 //! incompatible or unknown. See [OpenSearch RRF blog](https://opensearch.org/blog/introducing-reciprocal-rank-fusion-hybrid-search/).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 /// Compiles and runs the README's Rust examples as doctests.
@@ -140,8 +140,12 @@ const SCORE_RANGE_EPSILON: f32 = 1e-9;
 pub struct RrfConfig {
     /// Smoothing constant (default: 60).
     ///
-    /// **Must be >= 1** to avoid division by zero in the RRF formula.
-    /// Values < 1 will cause panics during fusion.
+    /// **Must be >= 1.** [`RrfConfig::new`] and [`RrfConfig::with_k`] panic on
+    /// 0. A config built with `k: 0` directly is rejected at fusion time: the
+    /// infallible functions ([`rrf_with_config`], [`rrf_multi`],
+    /// [`isr_with_config`], [`isr_multi`], [`rrf_explain`],
+    /// [`FusionMethod::fuse`], [`FusionMethod::fuse_multi`]) return an empty
+    /// list, and [`rrf_weighted`] returns [`FusionError::InvalidConfig`].
     pub k: u32,
     /// Maximum results to return (None = all).
     pub top_k: Option<usize>,
@@ -158,7 +162,7 @@ impl RrfConfig {
     ///
     /// # Panics
     ///
-    /// Panics if `k == 0` (would cause division by zero in RRF formula).
+    /// Panics if `k == 0` (see [`RrfConfig::k`]).
     ///
     /// # Example
     ///
@@ -184,7 +188,7 @@ impl RrfConfig {
     ///
     /// # Panics
     ///
-    /// Panics if `k == 0` (would cause division by zero in RRF formula).
+    /// Panics if `k == 0` (see [`RrfConfig::k`]).
     #[must_use]
     pub fn with_k(mut self, k: u32) -> Self {
         assert!(
@@ -536,7 +540,8 @@ impl FusionMethod {
     /// * `b` - Second ranked list (ID, score pairs)
     ///
     /// # Returns
-    /// Combined list sorted by fused score (descending)
+    /// Combined list sorted by fused score (descending). `Rrf { k: 0 }` and
+    /// `Isr { k: 0 }` return an empty list (see [`RrfConfig::k`]).
     #[must_use]
     pub fn fuse<I: Clone + Eq + Hash>(&self, a: &[(I, f32)], b: &[(I, f32)]) -> Vec<(I, f32)> {
         match self {
@@ -596,7 +601,8 @@ impl FusionMethod {
     /// * `lists` - Slice of ranked lists
     ///
     /// # Returns
-    /// Combined list sorted by fused score (descending)
+    /// Combined list sorted by fused score (descending). `Rrf { k: 0 }` and
+    /// `Isr { k: 0 }` return an empty list (see [`RrfConfig::k`]).
     #[must_use]
     pub fn fuse_multi<I, L>(&self, lists: &[L]) -> Vec<(I, f32)>
     where
@@ -683,7 +689,8 @@ impl FusionMethod {
 /// `RRF(d) = Σ 1/(k + rank_r(d))` where:
 /// - `k` = smoothing constant (default: 60)
 /// - `rank_r(d)` = position of document d in ranking r (1-indexed: the top
-///   document has rank 1, as in Cormack, Clarke & Büttcher 2009)
+///   document has rank 1, as in Cormack, Clarke & Büttcher 2009). A document
+///   repeated within one ranking contributes once, at its first (best) rank.
 ///
 /// # Why RRF?
 ///
@@ -786,21 +793,20 @@ pub fn rrf_with_config<I: Clone + Eq + Hash>(
     let estimated_size = results_a.len() + results_b.len();
     let mut scores: HashMap<I, f32> = HashMap::with_capacity(estimated_size);
 
-    // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
-    for (rank, (id, _)) in results_a.iter().enumerate() {
-        let contribution = 1.0 / (k + (rank + 1) as f32);
-        if let Some(score) = scores.get_mut(id) {
-            *score += contribution;
-        } else {
-            scores.insert(id.clone(), contribution);
-        }
-    }
-    for (rank, (id, _)) in results_b.iter().enumerate() {
-        let contribution = 1.0 / (k + (rank + 1) as f32);
-        if let Some(score) = scores.get_mut(id) {
-            *score += contribution;
-        } else {
-            scores.insert(id.clone(), contribution);
+    // A repeated id within one list counts once, at its first (best) rank.
+    for results in [results_a, results_b] {
+        let mut seen: HashSet<&I> = HashSet::with_capacity(results.len());
+        for (rank, (id, _)) in results.iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let contribution = 1.0 / (k + (rank + 1) as f32);
+            // get_mut + insert avoids cloning IDs when the entry already exists
+            if let Some(score) = scores.get_mut(id) {
+                *score += contribution;
+            } else {
+                scores.insert(id.clone(), contribution);
+            }
         }
     }
 
@@ -840,7 +846,12 @@ where
 
     // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
     for list in lists {
+        // A repeated id within one list counts once, at its first (best) rank.
+        let mut seen: HashSet<&I> = HashSet::with_capacity(list.as_ref().len());
         for (rank, (id, _)) in list.as_ref().iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
             let contribution = 1.0 / (k + (rank + 1) as f32);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
@@ -877,7 +888,8 @@ where
 /// # Errors
 ///
 /// - Returns [`FusionError::ZeroWeights`] if weights sum to zero.
-/// - Returns [`FusionError::InvalidConfig`] if `lists.len() != weights.len()`.
+/// - Returns [`FusionError::InvalidConfig`] if `lists.len() != weights.len()`
+///   or `config.k == 0`.
 #[allow(clippy::cast_precision_loss)]
 pub fn rrf_weighted<I, L>(lists: &[L], weights: &[f32], config: RrfConfig) -> Result<Vec<(I, f32)>>
 where
@@ -895,6 +907,11 @@ where
     if weight_sum.abs() < WEIGHT_EPSILON {
         return Err(FusionError::ZeroWeights);
     }
+    if config.k == 0 {
+        return Err(FusionError::InvalidConfig(
+            "k must be >= 1 (see RrfConfig::k)".to_string(),
+        ));
+    }
 
     let k = config.k as f32;
     // Pre-allocate capacity
@@ -903,7 +920,12 @@ where
 
     for (list, &weight) in lists.iter().zip(weights.iter()) {
         let normalized_weight = weight / weight_sum;
+        // A repeated id within one list counts once, at its first (best) rank.
+        let mut seen: HashSet<&I> = HashSet::with_capacity(list.as_ref().len());
         for (rank, (id, _)) in list.as_ref().iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
             let contribution = normalized_weight / (k + (rank + 1) as f32);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
@@ -2381,7 +2403,7 @@ where
     I: Clone + Eq + Hash,
     L: AsRef<[(I, f32)]>,
 {
-    if lists.is_empty() || lists.len() != retriever_ids.len() {
+    if lists.is_empty() || lists.len() != retriever_ids.len() || config.k == 0 {
         return Vec::new();
     }
 
@@ -2393,7 +2415,12 @@ where
     let mut provenance: HashMap<I, Vec<SourceContribution>> = HashMap::new();
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
+        // A repeated id within one list counts once, at its first (best) rank.
+        let mut seen: HashSet<&I> = HashSet::with_capacity(list.as_ref().len());
         for (rank, (id, original_score)) in list.as_ref().iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
             let contribution = 1.0 / (k + (rank + 1) as f32);
 
             // Update score
@@ -4510,13 +4537,78 @@ mod tests {
 
     #[test]
     fn duplicate_ids_in_same_list() {
+        // RRF (Cormack, Clarke & Buettcher 2009) sums 1/(k + rank) over the
+        // rankings a document appears in, with one rank per ranking. A repeated
+        // id therefore contributes once, at its first (best) position.
         let a = vec![("d1", 1.0), ("d1", 0.5)];
         let b: Vec<(&str, f32)> = vec![];
         let f = rrf_with_config(&a, &b, RrfConfig::new(60));
 
         assert_eq!(f.len(), 1);
-        let expected = 1.0 / 61.0 + 1.0 / 62.0;
+        let expected = 1.0 / 61.0;
         assert!((f[0].1 - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn duplicate_ids_count_once_per_list_in_every_rrf_variant() {
+        // d1 repeats in `a`; d2 sits at rank 3 in `a` and rank 1 in `b`.
+        let a = vec![("d1", 0.9), ("d1", 0.8), ("d2", 0.7)];
+        let b = vec![("d2", 0.9)];
+        let d1 = 1.0 / 61.0;
+        let d2 = 1.0 / 63.0 + 1.0 / 61.0;
+        let score = |f: &[(&str, f32)], id: &str| f.iter().find(|(d, _)| *d == id).unwrap().1;
+
+        let pair = rrf(&a, &b);
+        assert!((score(&pair, "d1") - d1).abs() < 1e-6);
+        assert!((score(&pair, "d2") - d2).abs() < 1e-6);
+
+        let multi = rrf_multi(&[&a[..], &b[..]], RrfConfig::default());
+        assert!((score(&multi, "d1") - d1).abs() < 1e-6);
+        assert!((score(&multi, "d2") - d2).abs() < 1e-6);
+
+        let weighted = rrf_weighted(&[&a[..], &b[..]], &[1.0, 1.0], RrfConfig::default()).unwrap();
+        assert!((score(&weighted, "d1") - d1 / 2.0).abs() < 1e-6);
+        assert!((score(&weighted, "d2") - d2 / 2.0).abs() < 1e-6);
+
+        let explained = rrf_explain(
+            &[&a[..], &b[..]],
+            &[RetrieverId::new("a"), RetrieverId::new("b")],
+            RrfConfig::default(),
+        );
+        let e1 = explained.iter().find(|r| r.id == "d1").unwrap();
+        assert!((e1.score - d1).abs() < 1e-6);
+        assert_eq!(e1.explanation.sources.len(), 1);
+        assert_eq!(e1.explanation.sources[0].original_rank, Some(0));
+    }
+
+    #[test]
+    fn k_zero_rule_is_consistent_across_rrf_and_isr_entry_points() {
+        // Config constructors reject k = 0 (see `k_zero_panics`). A config
+        // built as a struct literal with k = 0 gives an empty ranking from the
+        // infallible entry points and `InvalidConfig` from the fallible one.
+        let a = vec![("d1", 0.9), ("d2", 0.5)];
+        let b = vec![("d2", 0.8), ("d3", 0.3)];
+        let lists = [&a[..], &b[..]];
+        let zero = RrfConfig { k: 0, top_k: None };
+
+        assert!(rrf_with_config(&a, &b, zero).is_empty());
+        assert!(rrf_multi(&lists, zero).is_empty());
+        assert!(isr_with_config(&a, &b, zero).is_empty());
+        assert!(isr_multi(&lists, zero).is_empty());
+        for method in [FusionMethod::Rrf { k: 0 }, FusionMethod::Isr { k: 0 }] {
+            assert!(method.fuse(&a, &b).is_empty());
+            assert!(method.fuse_multi(&lists).is_empty());
+        }
+        assert!(rrf_explain(
+            &lists,
+            &[RetrieverId::new("a"), RetrieverId::new("b")],
+            zero
+        )
+        .is_empty());
+        assert!(matches!(
+            rrf_weighted(&lists, &[1.0, 1.0], zero),
+            Err(FusionError::InvalidConfig(_))
+        ));
     }
 
     #[test]
