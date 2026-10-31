@@ -9,6 +9,8 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-30
+
 - `adapt::from_distances` and `from_distances_mapped` keep negative distances
   in best-first order. They mapped every distance through `1 / (1 + d)`,
   which reverses order across `d = -1` and divides by zero at it, so

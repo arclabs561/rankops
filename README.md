@@ -12,7 +12,7 @@ Includes ranked-list fusion, reranking, and IR evaluation metrics.
 
 ```toml
 [dependencies]
-rankops = "0.2"
+rankops = "0.3"
 ```
 
 ### Fusion
