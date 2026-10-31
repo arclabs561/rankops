@@ -9,6 +9,14 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+- `dbsf`, `dbsf_with_config`, `dbsf_multi` and `dbsf_explain` map each list to
+  `(s - (mu - 3 sigma)) / (6 sigma)` clipped to [0, 1] before summing, as in
+  Mazzeschi's DBSF, so a document missing from a list counts as that list's
+  floor rather than its mean. Fused scores and orderings change; the doc
+  example now ranks d2, d3, d1, d4.
+- `dp_topk::dp_knapsack` returns the correct selection marginals. The backward
+  pass propagated the "pick" transition the wrong way, so marginals could
+  exceed one in total under a unit-capacity constraint.
 - Hybrid-search example now reports fixture-specific metrics and includes a
   synthetic two-query comparison of best-single, qrels-informed per-query
   oracle, and RRF scores. No library API changed.
