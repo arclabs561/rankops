@@ -9,6 +9,13 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+### Changed
+- RRF (`rrf`, `rrf_with_config`, `rrf_multi`, `rrf_weighted`, `rrf_explain`, `FusionMethod::Rrf`) counts a document repeated within one list once, at its first (best) rank, as in Cormack et al. 2009. It previously added a contribution per occurrence; fused scores change for inputs with repeated ids.
+- `k == 0` follows one documented rule (see `RrfConfig::k`): `RrfConfig::new` and `with_k` panic, infallible fusion functions return an empty list, and `rrf_weighted` returns `FusionError::InvalidConfig`. `rrf_explain` and `rrf_weighted` previously accepted `k == 0` and returned scores.
+
+### Fixed
+- `Pipeline` docs say that a pipeline without `.fuse(..)` uses `FusionMethod::default()` (RRF, k = 60), matching `execute`; they said it returned an empty list.
+
 ## [0.3.0] - 2026-10-30
 
 - `adapt::from_distances` and `from_distances_mapped` keep negative distances
