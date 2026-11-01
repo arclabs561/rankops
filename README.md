@@ -52,7 +52,7 @@ let method = FusionMethod::Rrf { k: 60 };
 let result = method.fuse(&bm25, &dense);
 ```
 
-### Diversity reranking (requires `rerank` feature, on by default)
+### Diversity reranking
 
 MMR selects the next document by balancing relevance against redundancy:
 
@@ -112,7 +112,7 @@ let summary = evaluate_with_config(&run, &qrels, config);
 
 ## Diagnostics
 
-The `diagnostics` module (`diagnose`, `overlap_ratio`, `complementarity`, `rank_correlation`) helps decide whether fusion is beneficial, based on Louis et al., "Know When to Fuse" (2024).
+The `diagnostics` module (`diagnose`, `overlap_ratio`, `complementarity`, `rank_correlation`) helps decide whether fusion is beneficial, based on Louis et al., "Know When to Fuse" (COLING 2025).
 
 ## Adapters
 
@@ -139,9 +139,9 @@ let result = Pipeline::new()
 
 Also: `compare()` for method comparison, `fuse_multi_query()` for the N-queries x M-retrievers RAG pattern.
 
-## Reranking (feature: `rerank`)
+## Reranking
 
-ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage reranking, and int8 quantization for token embeddings. On by default; also available: `hierarchical` (ColBERT clustering) and `serde`.
+The `rerank` module provides ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage reranking, and int8 quantization for token embeddings. It is available in every build: the default `rerank` feature computes vector operations with `innr`, and without it a local fallback is used. Optional features: `hierarchical` (ColBERT token clustering) and `serde`.
 
 ## Examples
 
@@ -154,6 +154,16 @@ cargo run --example evaluate          # Metrics, diagnostics, pipeline, method c
 cargo run --example trec_eval         # Parse TREC qrels/run files, collection-level metrics
 cargo run --example rerank_maxsim     # ColBERT MaxSim scoring
 cargo run --example diversity         # MMR and DPP diversity reranking
+```
+
+The start of the `fusion` output, fusing a BM25 list and a dense list of four documents each:
+
+```text
+RRF (default k=60):
+  doc_b    0.032522
+  doc_a    0.032266
+  doc_e    0.016129
+  doc_c    0.015873
 ```
 
 ## License
