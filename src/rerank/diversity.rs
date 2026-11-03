@@ -436,7 +436,9 @@ pub fn try_mmr<I: Clone>(
             }
         }
 
-        let chosen = remaining.swap_remove(best_idx);
+        // `remove` keeps `remaining` in input order, so ties go to the
+        // earliest candidate as in `crate::mmr`.
+        let chosen = remaining.remove(best_idx);
         selected_indices.push(chosen);
     }
 
@@ -553,7 +555,9 @@ pub fn mmr_cosine<I: Clone, V: AsRef<[f32]>>(
             }
         }
 
-        let chosen = remaining.swap_remove(best_idx);
+        // `remove` keeps `remaining` in input order, so ties go to the
+        // earliest candidate as in `crate::mmr`.
+        let chosen = remaining.remove(best_idx);
         selected_indices.push(chosen);
     }
 

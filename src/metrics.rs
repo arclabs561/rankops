@@ -291,7 +291,8 @@ pub fn ndcg_at_k_with_gain(relevance: &[f64], ideal: &[f64], k: usize, gain: Ndc
 ///
 /// # Returns
 ///
-/// Rank (1-indexed). Rank 1 = best.
+/// Rank (1-indexed). Rank 1 = best. A NaN `target_score` is not comparable
+/// to any candidate and gets the worst rank, `all_scores.len()` (at least 1).
 ///
 /// # Example
 ///
@@ -304,6 +305,9 @@ pub fn ndcg_at_k_with_gain(relevance: &[f64], ideal: &[f64], k: usize, gain: Ndc
 /// assert_eq!(rank, 2);
 /// ```
 pub fn compute_rank(target_score: f64, all_scores: &[f64], higher_is_better: bool) -> usize {
+    if target_score.is_nan() {
+        return all_scores.len().max(1);
+    }
     let mut rank = 1;
     for &score in all_scores {
         if higher_is_better {
