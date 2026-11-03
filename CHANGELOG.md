@@ -15,6 +15,11 @@ These source changes are listed without assigning them to a published release.
 
 ### Fixed
 - `Pipeline` docs say that a pipeline without `.fuse(..)` uses `FusionMethod::default()` (RRF, k = 60), matching `execute`; they said it returned an empty list.
+- Min-max normalization keeps a constant list (one hit, or all scores equal) in [0, 1] by mapping it to 0.5, as DBSF already does. It passed the raw score through, so in `combsum`, `combmnz`, `weighted` and their `_multi`/explain variants a single BM25 hit scoring 12.5 outranked every normalized score. Affects `Normalization::MinMax` and every fusion that min-max normalizes.
+- `Normalization::Quantile` gives tied scores the same value, the mean of their ranks divided by `n - 1`. Tied scores previously got different percentile ranks depending on input order.
+- `metrics::compute_rank` returns the worst rank (`all_scores.len()`) for a NaN target score. It returned rank 1, counting a NaN prediction as perfect.
+- `rerank::diversity::mmr` and `mmr_cosine` break ties toward the earliest candidate, as `crate::mmr` does. Removing each selected candidate with `swap_remove` reordered the remaining ones, so with tied relevance the last candidate was picked next.
+- `rerank::quantization::quantize_fp16` produces IEEE 754 binary16: it rounds to nearest (ties to even) instead of truncating, encodes subnormals instead of flushing them to zero, and maps values that round above 65504 to infinity instead of a NaN pattern. `dequantize_fp16` decodes subnormals as `mantissa * 2^-24`; it decoded them with an implicit leading 1 at exponent -15.
 
 ## [0.3.0] - 2026-10-30
 

@@ -1153,13 +1153,13 @@ where
     for (list, weight) in lists {
         let items = list.as_ref();
         let w = weight / total_weight;
-        let (norm, off) = if normalize {
+        let (norm, off, base) = if normalize {
             min_max_params(items)
         } else {
-            (1.0, 0.0)
+            (1.0, 0.0, 0.0)
         };
         for (id, s) in items {
-            let contribution = w * (s - off) * norm;
+            let contribution = w * ((s - off) * norm + base);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -1188,13 +1188,13 @@ where
     for (list, weight) in lists {
         let items = list.as_ref();
         let w = weight / total_weight;
-        let (norm, off) = if normalize {
+        let (norm, off, base) = if normalize {
             min_max_params(items)
         } else {
-            (1.0, 0.0)
+            (1.0, 0.0, 0.0)
         };
         for (id, s) in items {
-            let contribution = w * (s - off) * norm;
+            let contribution = w * ((s - off) * norm + base);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -1309,9 +1309,9 @@ where
 
     for list in lists {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (id, s) in items {
-            let contribution = (s - off) * norm;
+            let contribution = (s - off) * norm + base;
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -1420,10 +1420,10 @@ where
 
     for list in lists {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (id, s) in items {
             // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
-            let contribution = (s - off) * norm;
+            let contribution = (s - off) * norm + base;
             if let Some(entry) = scores.get_mut(id) {
                 entry.0 += contribution;
                 entry.1 += 1;
@@ -2074,6 +2074,8 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
 pub enum Normalization {
     /// Min-max normalization: `(score - min) / (max - min)` → [0, 1]
     ///
+    /// A constant list (one result, or all scores equal) maps to 0.5.
+    ///
     /// Best when score distributions are similar. Sensitive to outliers.
     #[default]
     MinMax,
@@ -2094,7 +2096,8 @@ pub enum Normalization {
     /// Quantile normalization: maps scores to their percentile rank in [0, 1].
     ///
     /// More robust than min-max for non-Gaussian score distributions.
-    /// Each score becomes `rank_among_scores / (n - 1)`.
+    /// Each score becomes `rank_among_scores / (n - 1)`; tied scores share the
+    /// mean of their ranks.
     /// Referenced as an alternative to 3-sigma DBSF normalization
     /// when cosine similarity scores are not normally distributed.
     Quantile,
@@ -2119,10 +2122,10 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
 
     match method {
         Normalization::MinMax => {
-            let (norm, off) = min_max_params(results);
+            let (norm, off, base) = min_max_params(results);
             results
                 .iter()
-                .map(|(id, s)| (id.clone(), (s - off) * norm))
+                .map(|(id, s)| (id.clone(), (s - off) * norm + base))
                 .collect()
         }
         Normalization::ZScore => {
@@ -2186,8 +2189,22 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
             if n == 1 {
                 quantiles[0] = 0.5; // Single item gets middle quantile
             } else {
-                for (rank, &(orig_idx, _)) in indexed.iter().enumerate() {
-                    quantiles[orig_idx] = rank as f32 / (n - 1) as f32;
+                // Tied scores share the mean of their ranks, so equal scores
+                // get equal percentile ranks.
+                let mut start = 0;
+                while start < n {
+                    let s = indexed[start].1;
+                    let mut end = start + 1;
+                    while end < n
+                        && (indexed[end].1 == s || (s.is_nan() && indexed[end].1.is_nan()))
+                    {
+                        end += 1;
+                    }
+                    let mean_rank = (start + end - 1) as f32 / 2.0;
+                    for &(orig_idx, _) in &indexed[start..end] {
+                        quantiles[orig_idx] = mean_rank / (n - 1) as f32;
+                    }
+                    start = end;
                 }
             }
 
@@ -2205,16 +2222,18 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
     }
 }
 
-/// Returns `(norm_factor, offset)` for min-max normalization.
+/// Returns `(norm_factor, offset, base)` for min-max normalization.
 ///
-/// Normalized score = `(score - offset) * norm_factor`
+/// Normalized score = `(score - offset) * norm_factor + base`
 ///
-/// For single-element lists or lists where all scores are equal,
-/// returns `(0.0, 0.0)` so each element contributes its raw score.
+/// For single-element lists or lists where all scores are equal, returns
+/// `(0.0, min, 0.5)` so each element maps to 0.5, the midpoint (as in
+/// `dbsf_normalize` and single-item quantile normalization): the result stays
+/// in [0, 1] and presence still counts for more than absence (0).
 #[inline(always)]
-fn min_max_params<I>(results: &[(I, f32)]) -> (f32, f32) {
+fn min_max_params<I>(results: &[(I, f32)]) -> (f32, f32, f32) {
     if results.is_empty() {
-        return (1.0, 0.0);
+        return (1.0, 0.0, 0.0);
     }
     let (min, max) = results
         .iter()
@@ -2223,10 +2242,11 @@ fn min_max_params<I>(results: &[(I, f32)]) -> (f32, f32) {
         });
     let range = max - min;
     if range < SCORE_RANGE_EPSILON {
-        // All scores equal: just pass through the score (norm=1, offset=0)
-        (1.0, 0.0)
+        // All scores equal: map every score to the midpoint rather than
+        // passing the raw score through outside [0, 1].
+        (0.0, min, 0.5)
     } else {
-        (1.0 / range, min)
+        (1.0 / range, min, 0.0)
     }
 }
 
@@ -2675,9 +2695,9 @@ where
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (rank, (id, original_score)) in items.iter().enumerate() {
-            let normalized_score = (original_score - off) * norm;
+            let normalized_score = (original_score - off) * norm + base;
             let contribution = normalized_score;
 
             *scores.entry(id.clone()).or_insert(0.0) += contribution;
@@ -2720,9 +2740,9 @@ where
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (rank, (id, original_score)) in items.iter().enumerate() {
-            let normalized_score = (original_score - off) * norm;
+            let normalized_score = (original_score - off) * norm + base;
             let contribution = normalized_score;
 
             let entry = scores.entry(id.clone()).or_insert((0.0, 0));
