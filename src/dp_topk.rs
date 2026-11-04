@@ -10,7 +10,7 @@
 //! sum drifts below `k` and top items can collapse toward 0), so this does NOT
 //! converge to hard top-k as `t -> 0` in f32. Use `t` in roughly `[1e-2, 1.0]`.
 //! Computing the DP/marginal internally in f64 would extend the usable range;
-//! see `examples/dp_topk_validation.rs` for the conservation check.
+//! see `tests/dp_topk_validation.rs` for the conservation check.
 //!
 //! Reference: Vivier-Ardisson, Sander, Parmentier, Blondel 2026
 //! "Differentiable Knapsack and Top-k Operators"

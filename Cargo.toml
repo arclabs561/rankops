@@ -50,3 +50,7 @@ proptest = "1.9"
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "pareto_rerank"
+required-features = ["pareto"]

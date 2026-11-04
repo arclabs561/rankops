@@ -40,3 +40,7 @@ cargo build --examples --all-features
 cargo run --release --example hybrid_search
 cargo run --release --example trec_eval
 ```
+
+Checks against a known answer live in `tests/`, not here, so `cargo test` runs
+them. For example, `tests/dp_topk_validation.rs` compares `dp_topk` with the
+exact hard top-k indicator.
