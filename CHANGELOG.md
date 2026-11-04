@@ -9,6 +9,8 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-04
+
 ### Changed
 
 - `mmr`, `rerank::diversity::mmr` and `mmr_cosine` keep a running max
