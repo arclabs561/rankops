@@ -405,6 +405,11 @@ pub fn try_mmr<I: Clone>(
 
     let mut selected_indices: Vec<usize> = Vec::with_capacity(config.k.min(n));
     let mut remaining: Vec<usize> = (0..n).collect();
+    // max_sims[i]: max similarity of candidate i to the selected set, updated
+    // per selection, so a round reads one similarity per candidate rather than
+    // one per (candidate, selected) pair. `f32::max` is order-independent, so
+    // scores match the from-scratch fold bit for bit.
+    let mut max_sims: Vec<f32> = vec![f32::NEG_INFINITY; n];
 
     for _ in 0..config.k.min(n) {
         if remaining.is_empty() {
@@ -421,10 +426,7 @@ pub fn try_mmr<I: Clone>(
             let max_sim = if selected_indices.is_empty() {
                 0.0
             } else {
-                selected_indices
-                    .iter()
-                    .map(|&sel_idx| similarity[cand_idx * n + sel_idx])
-                    .fold(f32::NEG_INFINITY, f32::max)
+                max_sims[cand_idx]
             };
 
             // MMR score: λ * relevance - (1-λ) * max_similarity
@@ -439,6 +441,9 @@ pub fn try_mmr<I: Clone>(
         // `remove` keeps `remaining` in input order, so ties go to the
         // earliest candidate as in `crate::mmr`.
         let chosen = remaining.remove(best_idx);
+        for &cand_idx in &remaining {
+            max_sims[cand_idx] = max_sims[cand_idx].max(similarity[cand_idx * n + chosen]);
+        }
         selected_indices.push(chosen);
     }
 
@@ -524,6 +529,11 @@ pub fn mmr_cosine<I: Clone, V: AsRef<[f32]>>(
 
     let mut selected_indices: Vec<usize> = Vec::with_capacity(config.k.min(n));
     let mut remaining: Vec<usize> = (0..n).collect();
+    // max_sims[i]: max similarity of candidate i to the selected set, updated
+    // per selection, so a round reads one similarity per candidate rather than
+    // one per (candidate, selected) pair. `f32::max` is order-independent, so
+    // scores match the from-scratch fold bit for bit.
+    let mut max_sims: Vec<f32> = vec![f32::NEG_INFINITY; n];
 
     for _ in 0..config.k.min(n) {
         if remaining.is_empty() {
@@ -535,16 +545,11 @@ pub fn mmr_cosine<I: Clone, V: AsRef<[f32]>>(
 
         for (remaining_pos, &cand_idx) in remaining.iter().enumerate() {
             let relevance = rel_norm[cand_idx];
-            let cand_emb = embeddings[cand_idx].as_ref();
 
-            // Compute max similarity to selected documents on-the-fly
             let max_sim = if selected_indices.is_empty() {
                 0.0
             } else {
-                selected_indices
-                    .iter()
-                    .map(|&sel_idx| simd::cosine(cand_emb, embeddings[sel_idx].as_ref()))
-                    .fold(f32::NEG_INFINITY, f32::max)
+                max_sims[cand_idx]
             };
 
             let mmr_score = config.lambda * relevance - (1.0 - config.lambda) * max_sim;
@@ -558,6 +563,11 @@ pub fn mmr_cosine<I: Clone, V: AsRef<[f32]>>(
         // `remove` keeps `remaining` in input order, so ties go to the
         // earliest candidate as in `crate::mmr`.
         let chosen = remaining.remove(best_idx);
+        let chosen_emb = embeddings[chosen].as_ref();
+        for &cand_idx in &remaining {
+            let sim = simd::cosine(embeddings[cand_idx].as_ref(), chosen_emb);
+            max_sims[cand_idx] = max_sims[cand_idx].max(sim);
+        }
         selected_indices.push(chosen);
     }
 

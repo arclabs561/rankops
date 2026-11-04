@@ -3609,13 +3609,18 @@ where
     // Track selected documents and remaining candidates
     let mut selected: Vec<(I, f32)> = Vec::with_capacity(k);
     let mut remaining: Vec<(I, f32)> = normalized;
+    // max_sim[i] is max_{s in S} Sim(remaining[i], s), updated with each new
+    // selection, so a round costs one similarity call per candidate instead of
+    // one per (candidate, selected) pair. `f32::max` gives the same value in
+    // any order, so scores match the from-scratch fold bit for bit.
+    let mut max_sim: Vec<f32> = vec![f32::NEG_INFINITY; remaining.len()];
 
     // Greedy selection
     while selected.len() < k && !remaining.is_empty() {
         let mut best_idx = 0;
         let mut best_mmr = f32::NEG_INFINITY;
 
-        for (idx, (cand_id, cand_rel)) in remaining.iter().enumerate() {
+        for (idx, (_, cand_rel)) in remaining.iter().enumerate() {
             // Relevance term: λ · Sim(d, q)
             let relevance_term = lambda * cand_rel;
 
@@ -3623,11 +3628,7 @@ where
             let redundancy_term = if selected.is_empty() {
                 0.0
             } else {
-                let max_sim = selected
-                    .iter()
-                    .map(|(sel_id, _)| similarity(cand_id, sel_id))
-                    .fold(f32::NEG_INFINITY, f32::max);
-                (1.0 - lambda) * max_sim
+                (1.0 - lambda) * max_sim[idx]
             };
 
             // MMR score
@@ -3641,6 +3642,10 @@ where
 
         // Move best candidate to selected set
         let (id, _) = remaining.remove(best_idx);
+        max_sim.remove(best_idx);
+        for ((cand_id, _), sim) in remaining.iter().zip(max_sim.iter_mut()) {
+            *sim = sim.max(similarity(cand_id, &id));
+        }
         selected.push((id, best_mmr));
     }
 
