@@ -9,6 +9,29 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+### Added
+
+- `metrics::compute_expected_rank`: the expected rank under random
+  tie-breaking (`1 + better + ties / 2`). `compute_rank` documents that it
+  breaks ties in the target's favor, which overstates MRR when many
+  candidates tie.
+
+### Changed
+
+- `rerank_batch` and `rerank_fine_grained` rank candidates that lack the
+  embeddings the method needs after every scored candidate, ordered by their
+  original score, instead of sorting original scores together with
+  similarities. In `rerank_fine_grained` such candidates get score 0.
+- `Pipeline::execute` sends a single run through the fusion method, as it
+  does several, so the output is sorted and on the method's scale before
+  `top_k`; it returned a lone run unchanged.
+
+### Documentation
+
+- `rerank_fine_grained` describes its fixed `[min_score, max_score]` mapping
+  (the doc said min-max over candidates) and how to pick the range for MaxSim.
+
+
 ## [0.4.0] - 2026-11-03
 
 ### Changed

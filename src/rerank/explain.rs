@@ -237,6 +237,43 @@ impl FineGrainedConfig {
     }
 }
 
+/// Similarity of `candidate` to the query under `method`, or `None` when the
+/// candidate or query lacks the embeddings the method needs. `MaxSimWeighted`
+/// needs per-token weights these inputs do not carry, so it never scores.
+fn similarity<K>(
+    query_dense: &Option<&[f32]>,
+    query_tokens: &Option<&[Vec<f32>]>,
+    candidate: &Candidate<'_, K>,
+    method: RerankMethod,
+) -> Option<f32> {
+    match method {
+        RerankMethod::DenseCosine => {
+            Some(simd::cosine((*query_dense)?, candidate.dense_embedding?))
+        }
+        RerankMethod::MaxSim => Some(simd::maxsim_vecs(
+            (*query_tokens)?,
+            candidate.token_embeddings?,
+        )),
+        RerankMethod::MaxSimCosine => Some(simd::maxsim_cosine_vecs(
+            (*query_tokens)?,
+            candidate.token_embeddings?,
+        )),
+        RerankMethod::MaxSimWeighted => None,
+    }
+}
+
+/// Sort scored candidates first by similarity, then the unscored ones by
+/// their original score. A similarity and an original score are on different
+/// scales, so they are never compared with each other.
+fn sort_scored_first<T>(items: &mut [T], key: impl Fn(&T) -> (Option<f32>, f32)) {
+    items.sort_by(|a, b| match (key(a), key(b)) {
+        ((Some(x), _), (Some(y), _)) => y.total_cmp(&x),
+        ((Some(_), _), (None, _)) => std::cmp::Ordering::Less,
+        ((None, _), (Some(_), _)) => std::cmp::Ordering::Greater,
+        ((None, x), (None, y)) => y.total_cmp(&x),
+    });
+}
+
 /// Fine-grained reranking result with integer scores.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -259,8 +296,14 @@ pub struct FineGrainedResult<K> {
 ///
 /// # Algorithm
 ///
-/// 1. Compute similarity scores (same as `rerank_batch`)
-/// 2. Normalize scores to [0, 1] using min-max: `(score - min) / (max - min)`
+/// 1. Compute similarity scores (same as `rerank_batch`, including its
+///    ordering of candidates that cannot be scored)
+/// 2. Map scores to [0, 1] over the fixed range in `config`:
+///    `(clamp(score, min_score, max_score) - min_score) / (max_score - min_score)`.
+///    A fixed range keeps scores comparable across queries. Pick it for the
+///    method: cosine-based methods lie in [-1, 1], while MaxSim sums one
+///    similarity per query token, so its range grows with the query length.
+///    Candidates that could not be scored map to 0.
 /// 3. Optionally apply probability weighting (softmax-like) to emphasize high scores
 /// 4. Map to integer scale: `round(normalized * 10)` clamped to [0, 10]
 ///
@@ -307,82 +350,37 @@ pub fn rerank_fine_grained<'a, K: Clone>(
     top_k: usize,
 ) -> Vec<FineGrainedResult<K>> {
     // First, compute similarity scores (same as rerank_batch)
-    let mut results: Vec<(K, f32, f32)> = input
+    let mut results: Vec<(K, Option<f32>, f32)> = input
         .candidates
         .into_iter()
         .map(|candidate| {
-            let score = match method {
-                RerankMethod::DenseCosine => {
-                    if let (Some(q), Some(d)) = (input.query_dense, candidate.dense_embedding) {
-                        simd::cosine(q, d)
-                    } else {
-                        candidate.original_score
-                    }
-                }
-                RerankMethod::MaxSim => {
-                    if let (Some(q_tokens), Some(d_tokens)) =
-                        (input.query_tokens, candidate.token_embeddings)
-                    {
-                        simd::maxsim_vecs(q_tokens, d_tokens)
-                    } else {
-                        candidate.original_score
-                    }
-                }
-                RerankMethod::MaxSimCosine => {
-                    if let (Some(q_tokens), Some(d_tokens)) =
-                        (input.query_tokens, candidate.token_embeddings)
-                    {
-                        simd::maxsim_cosine_vecs(q_tokens, d_tokens)
-                    } else {
-                        candidate.original_score
-                    }
-                }
-                RerankMethod::MaxSimWeighted => {
-                    // Weighted MaxSim requires weights parameter - use original score
-                    candidate.original_score
-                }
-            };
-
+            let score = similarity(&input.query_dense, &input.query_tokens, &candidate, method);
             (candidate.id, score, candidate.original_score)
         })
         .collect();
-
-    // Sort by similarity score descending (unstable for better performance)
-    results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
+    sort_scored_first(&mut results, |r| (r.1, r.2));
 
     // Find min/max for normalization
     if results.is_empty() {
         return Vec::new();
     }
 
-    let _min_sim = results
-        .iter()
-        .map(|(_, s, _)| *s)
-        .fold(f32::INFINITY, f32::min);
-    let _max_sim = results
-        .iter()
-        .map(|(_, s, _)| *s)
-        .fold(f32::NEG_INFINITY, f32::max);
-
     // Normalize to [0, 1] using config range
     let score_range = config.max_score - config.min_score;
-    let normalized: Vec<(K, f32, f32, f32)> = if score_range > 1e-9 {
-        results
-            .into_iter()
-            .map(|(id, sim, orig)| {
+    let normalized: Vec<(K, f32, f32, f32)> = results
+        .into_iter()
+        .map(|(id, sim, orig)| match sim {
+            // Candidates that could not be scored map to 0.
+            None => (id, orig, orig, 0.0),
+            Some(sim) if score_range > 1e-9 => {
                 // Clamp to config range, then normalize
                 let clamped = sim.clamp(config.min_score, config.max_score);
-                let norm = (clamped - config.min_score) / score_range;
-                (id, sim, orig, norm)
-            })
-            .collect()
-    } else {
-        // All scores equal or invalid range - use uniform distribution
-        results
-            .into_iter()
-            .map(|(id, sim, orig)| (id, sim, orig, 0.5))
-            .collect()
-    };
+                (id, sim, orig, (clamped - config.min_score) / score_range)
+            }
+            // Invalid range: use the midpoint
+            Some(sim) => (id, sim, orig, 0.5),
+        })
+        .collect();
 
     // Apply probability weighting if enabled
     let weighted: Vec<(K, f32, f32, f32)> =
@@ -472,53 +470,24 @@ pub fn rerank_batch<'a, K: Clone>(
     method: RerankMethod,
     top_k: usize,
 ) -> Vec<RankedResult<K>> {
-    let mut results: Vec<RankedResult<K>> = input
+    let mut scored: Vec<(K, Option<f32>, f32)> = input
         .candidates
         .into_iter()
         .map(|candidate| {
-            let score = match method {
-                RerankMethod::DenseCosine => {
-                    if let (Some(q), Some(d)) = (input.query_dense, candidate.dense_embedding) {
-                        simd::cosine(q, d)
-                    } else {
-                        candidate.original_score
-                    }
-                }
-                RerankMethod::MaxSim => {
-                    if let (Some(q_tokens), Some(d_tokens)) =
-                        (input.query_tokens, candidate.token_embeddings)
-                    {
-                        simd::maxsim_vecs(q_tokens, d_tokens)
-                    } else {
-                        candidate.original_score
-                    }
-                }
-                RerankMethod::MaxSimCosine => {
-                    if let (Some(q_tokens), Some(d_tokens)) =
-                        (input.query_tokens, candidate.token_embeddings)
-                    {
-                        simd::maxsim_cosine_vecs(q_tokens, d_tokens)
-                    } else {
-                        candidate.original_score
-                    }
-                }
-                RerankMethod::MaxSimWeighted => {
-                    // Weighted MaxSim requires weights parameter - use maxsim_weighted directly
-                    candidate.original_score
-                }
-            };
-
-            RankedResult {
-                id: candidate.id,
-                score,
-                original_score: candidate.original_score,
-                rank: 0, // Will be set after sorting
-            }
+            let score = similarity(&input.query_dense, &input.query_tokens, &candidate, method);
+            (candidate.id, score, candidate.original_score)
         })
         .collect();
-
-    // Sort by score descending (unstable for better performance)
-    results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+    sort_scored_first(&mut scored, |r| (r.1, r.2));
+    let mut results: Vec<RankedResult<K>> = scored
+        .into_iter()
+        .map(|(id, score, original_score)| RankedResult {
+            id,
+            score: score.unwrap_or(original_score),
+            original_score,
+            rank: 0, // Will be set after sorting
+        })
+        .collect();
 
     // Set ranks
     for (rank, result) in results.iter_mut().enumerate() {

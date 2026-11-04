@@ -294,6 +294,11 @@ pub fn ndcg_at_k_with_gain(relevance: &[f64], ideal: &[f64], k: usize, gain: Ndc
 /// Rank (1-indexed). Rank 1 = best. A NaN `target_score` is not comparable
 /// to any candidate and gets the worst rank, `all_scores.len()` (at least 1).
 ///
+/// Ties count in the target's favor: candidates with the same score do not
+/// push it down. With many ties this overstates MRR and Hits@k (Sun et al.,
+/// ACL 2020); [`compute_expected_rank`] gives the expected rank under random
+/// tie-breaking instead.
+///
 /// # Example
 ///
 /// ```rust
@@ -319,6 +324,43 @@ pub fn compute_rank(target_score: f64, all_scores: &[f64], higher_is_better: boo
         }
     }
     rank
+}
+
+/// Expected rank (1-indexed) of the target under uniformly random tie-breaking:
+/// `1 + better + ties / 2`, where `ties` counts the other candidates with the
+/// target's score. `all_scores` includes the target, as for [`compute_rank`].
+/// A NaN `target_score` gets the worst rank, `all_scores.len()` (at least 1).
+///
+/// # Example
+///
+/// ```rust
+/// use rankops::metrics::{compute_expected_rank, compute_rank};
+///
+/// let scores = [0.5, 0.5, 0.5, 0.1];
+/// assert_eq!(compute_rank(0.5, &scores, true), 1);
+/// assert_eq!(compute_expected_rank(0.5, &scores, true), 2.0);
+/// ```
+#[must_use]
+pub fn compute_expected_rank(target_score: f64, all_scores: &[f64], higher_is_better: bool) -> f64 {
+    if target_score.is_nan() {
+        return all_scores.len().max(1) as f64;
+    }
+    let better = all_scores
+        .iter()
+        .filter(|&&s| {
+            if higher_is_better {
+                s > target_score
+            } else {
+                s < target_score
+            }
+        })
+        .count();
+    let ties = all_scores
+        .iter()
+        .filter(|&&s| s == target_score)
+        .count()
+        .saturating_sub(1);
+    1.0 + better as f64 + ties as f64 / 2.0
 }
 
 /// Aggregate ranking metrics.
