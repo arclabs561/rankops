@@ -9,6 +9,15 @@ These source changes are listed without assigning them to a published release.
 
 ## [Unreleased]
 
+### Changed
+
+- `mmr`, `rerank::diversity::mmr` and `mmr_cosine` keep a running max
+  similarity per candidate instead of recomputing it against every selected
+  item each round, so selection makes O(k·n) similarity calls instead of
+  O(k²·n). Output is bit-identical. At n = 1000, 384 dimensions,
+  `mmr_cosine` takes 0.85 ms instead of 7.4 ms for k = 20 and 4.3 ms
+  instead of 200 ms for k = 100.
+
 ## [0.5.0] - 2026-11-04
 
 ### Added
