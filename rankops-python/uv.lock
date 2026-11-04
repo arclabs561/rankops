@@ -748,7 +748,7 @@ wheels = [
 
 [[package]]
 name = "rankops"
-version = "0.1.23"
+version = "0.1.24"
 source = { editable = "." }
 
 [package.dev-dependencies]
