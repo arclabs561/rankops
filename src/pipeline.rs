@@ -99,9 +99,10 @@ impl<I: Clone + Eq + Hash> Pipeline<I> {
 
     /// Execute the pipeline and return fused results.
     ///
-    /// Returns an empty list if no runs were added. A single run is returned
-    /// as is (after normalization). With no fusion method set, runs are fused
-    /// with [`FusionMethod::default`] (RRF with k = 60).
+    /// Returns an empty list if no runs were added. A single run goes through
+    /// the fusion method like several do, so its output is sorted and on the
+    /// method's score scale before `top_k` applies. With no fusion method
+    /// set, runs are fused with [`FusionMethod::default`] (RRF with k = 60).
     #[must_use]
     pub fn execute(&self) -> Vec<(I, f32)> {
         if self.runs.is_empty() {
@@ -122,9 +123,7 @@ impl<I: Clone + Eq + Hash> Pipeline<I> {
         let method = self.method.unwrap_or_default();
         let refs: Vec<&[(I, f32)]> = normalized.iter().map(|v| v.as_slice()).collect();
 
-        let mut fused = if refs.len() == 1 {
-            refs[0].to_vec()
-        } else if refs.len() == 2 {
+        let mut fused = if refs.len() == 2 {
             method.fuse(refs[0], refs[1])
         } else {
             method.fuse_multi(&refs)
