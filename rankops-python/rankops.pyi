@@ -293,13 +293,34 @@ def rrf(results_a: RankedList, results_b: RankedList, k: int = 60, top_k: Option
     """
     ...
 
-def rrf_multi(lists: MultiRankedLists, k: int = 60, top_k: Optional[int] = None) -> RankedList:
+def rrf_multi(lists: MultiRankedLists, k: int = 60, top_k: Optional[int] = None, tie_break: Optional[str] = None) -> RankedList:
     """Reciprocal Rank Fusion of multiple ranked lists.
 
     Args:
         lists: List of ranked lists, each containing (id, score) tuples.
         k: Smoothing constant. Default: 60.
         top_k: Maximum number of results to return. None returns all.
+        tie_break: Order of equal fused scores. None keeps the library's
+            identifier-hash order; "id" orders ties by ascending id before
+            top_k cuts the list.
+
+    Returns:
+        List of (id, score) tuples sorted by fused score descending.
+    """
+    ...
+
+def rrf_weighted(lists: MultiRankedLists, weights: List[float], k: int = 60, top_k: Optional[int] = None, tie_break: Optional[str] = None) -> RankedList:
+    """Weighted Reciprocal Rank Fusion of multiple ranked lists.
+
+    Each list contributes weight / (k + rank); input scores are ignored.
+
+    Args:
+        lists: List of ranked lists, each containing (id, score) tuples.
+        weights: One weight per list. Raises ValueError if the lengths
+            differ or the weights sum to zero.
+        k: Smoothing constant. Default: 60.
+        top_k: Maximum number of results to return. None returns all.
+        tie_break: None or "id", as in rrf_multi.
 
     Returns:
         List of (id, score) tuples sorted by fused score descending.
@@ -764,6 +785,25 @@ def mmr(candidates: RankedList, embeddings: List[List[float]], lambda_: float = 
         embeddings: Embedding vector for each candidate (same order).
         lambda_: Trade-off parameter. 1.0 = pure relevance,
             0.0 = pure diversity. Default: 0.5.
+        k: Number of results to select. Default: 10.
+
+    Returns:
+        List of (id, score) tuples for the selected diverse subset.
+    """
+    ...
+
+def mmr_similarity(candidates: RankedList, similarity: List[List[float]], lambda_: float = 0.5, k: int = 10) -> RankedList:
+    """MMR diversity reranking over a precomputed pairwise similarity matrix.
+
+    Use when diversity is not embedding cosine, for example tag-set Jaccard.
+    The score is lambda_ * relevance - (1 - lambda_) * max_similarity, with
+    relevance min-max normalized to [0, 1] across the candidates.
+
+    Args:
+        candidates: List of (id, score) pairs.
+        similarity: n x n matrix; row i, column j is the similarity of
+            candidates i and j. Raises ValueError if it is not n x n.
+        lambda_: 1.0 = pure relevance, 0.0 = pure diversity. Default: 0.5.
         k: Number of results to select. Default: 10.
 
     Returns:
