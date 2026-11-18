@@ -3762,7 +3762,26 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// Relevance judgments (qrels) for a query.
 ///
 /// Maps document IDs to relevance scores (typically 0=not relevant, 1=relevant, 2=highly relevant).
+/// In metrics over a result list, only the first occurrence of a relevant document
+/// earns credit. Later copies still occupy their original rank positions.
 pub type Qrels<K> = std::collections::HashMap<K, u32>;
+
+// Yield each relevant document's one-based rank and grade on its first appearance.
+fn relevant_hits<'a, K: Eq + Hash>(
+    results: &'a [(K, f32)],
+    qrels: &'a Qrels<K>,
+    k: usize,
+) -> impl Iterator<Item = (usize, u32)> + 'a {
+    let mut seen = HashSet::new();
+    results
+        .iter()
+        .take(k)
+        .enumerate()
+        .filter_map(move |(i, (id, _))| {
+            let grade = *qrels.get(id)?;
+            (grade > 0 && seen.insert(id)).then_some((i + 1, grade))
+        })
+}
 
 /// Normalized Discounted Cumulative Gain at k with linear gain.
 ///
@@ -3795,15 +3814,9 @@ pub fn ndcg_at_k_with_gain<K: Clone + Eq + Hash>(
         return 0.0;
     }
 
-    let retrieved = k.min(results.len());
-    let mut dcg = 0.0;
-
-    for (i, (id, _)) in results.iter().take(retrieved).enumerate() {
-        if let Some(&rel) = qrels.get(id) {
-            let discounted_gain = gain.apply(rel as f64) as f32 / ((i + 2) as f32).log2();
-            dcg += discounted_gain;
-        }
-    }
+    let dcg: f32 = relevant_hits(results, qrels, k)
+        .map(|(rank, grade)| gain.apply(grade as f64) as f32 / ((rank + 1) as f32).log2())
+        .sum();
 
     // Compute IDCG (ideal DCG)
     let mut ideal_relevances: Vec<u32> = qrels.values().copied().collect();
@@ -3847,12 +3860,7 @@ pub fn recall_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>,
         return 0.0;
     }
 
-    let retrieved = k.min(results.len());
-    let relevant_in_top_k = results
-        .iter()
-        .take(retrieved)
-        .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
-        .count();
+    let relevant_in_top_k = relevant_hits(results, qrels, k).count();
 
     relevant_in_top_k as f32 / total_relevant as f32
 }
@@ -3871,12 +3879,7 @@ pub fn precision_at_k<K: Clone + Eq + Hash>(
         return 0.0;
     }
 
-    let retrieved = k.min(results.len());
-    let relevant_in_top_k = results
-        .iter()
-        .take(retrieved)
-        .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
-        .count();
+    let relevant_in_top_k = relevant_hits(results, qrels, k).count();
 
     relevant_in_top_k as f32 / k as f32
 }
@@ -3891,23 +3894,7 @@ pub fn precision_at_k<K: Clone + Eq + Hash>(
 /// where R is the set of relevant documents and rel(k) is 1 if the document
 /// at rank k is relevant.
 pub fn map<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>) -> f32 {
-    let total_relevant = qrels.values().filter(|&&rel| rel > 0).count();
-    if total_relevant == 0 || results.is_empty() {
-        return 0.0;
-    }
-
-    let mut sum_precision = 0.0;
-    let mut relevant_seen = 0;
-
-    for (i, (id, _)) in results.iter().enumerate() {
-        if qrels.get(id).is_some_and(|&rel| rel > 0) {
-            relevant_seen += 1;
-            // Precision at this rank position
-            sum_precision += relevant_seen as f32 / (i + 1) as f32;
-        }
-    }
-
-    sum_precision / total_relevant as f32
+    map_at_k(results, qrels, results.len())
 }
 
 /// Mean Average Precision at k (MAP@k).
@@ -3922,16 +3909,10 @@ pub fn map_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k:
         return 0.0;
     }
 
-    let k = k.min(results.len());
-    let mut sum_precision = 0.0;
-    let mut relevant_seen = 0;
-
-    for (i, (id, _)) in results.iter().take(k).enumerate() {
-        if qrels.get(id).is_some_and(|&rel| rel > 0) {
-            relevant_seen += 1;
-            sum_precision += relevant_seen as f32 / (i + 1) as f32;
-        }
-    }
+    let sum_precision: f32 = relevant_hits(results, qrels, k)
+        .enumerate()
+        .map(|(i, (rank, _))| (i + 1) as f32 / rank as f32)
+        .sum();
 
     // Unretrieved relevant documents contribute zero, matching TREC map_cut.
     sum_precision / total_relevant as f32
@@ -5456,6 +5437,21 @@ mod tests {
     fn make_qrels() -> Qrels<&'static str> {
         // d1=highly relevant, d2=relevant, d3=relevant, d4/d5=not relevant
         HashMap::from([("d1", 2), ("d2", 1), ("d3", 1)])
+    }
+
+    #[test]
+    fn duplicate_results_consume_rank_without_earning_credit() {
+        let qrels = Qrels::from([("a", 2), ("b", 1)]);
+        let results = ranked(&["a", "a", "b"]);
+        assert_eq!(recall_at_k(&results, &qrels, 2), 0.5);
+        assert_eq!(precision_at_k(&results, &qrels, 2), 0.5);
+        assert_eq!(map_at_k(&results, &qrels, 2), 0.5);
+        assert!((map(&results, &qrels) - 5.0 / 6.0).abs() < 1e-6);
+        for gain in [metrics::NdcgGain::Linear, metrics::NdcgGain::Exponential] {
+            let a = gain.apply(2.0) as f32;
+            let expected = (a + 0.5) / (a + 1.0 / 3.0_f32.log2());
+            assert!((ndcg_at_k_with_gain(&results, &qrels, 3, gain) - expected).abs() < 1e-6);
+        }
     }
 
     #[test]
