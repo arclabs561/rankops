@@ -110,6 +110,16 @@ let summary = evaluate_with_config(&run, &qrels, config);
 
 `evaluate(&run, &qrels, k)` remains the short form for the default configuration. Validated `TrecRun` and `TrecQrels` values can also be built from in-memory records. The checked-in parity corpus is part of `cargo test`; with `trec_eval` installed, run `scripts/verify-trec-parity.sh` to compare both the default judged-only and `-c` query-coverage modes.
 
+Compare two TREC runs on one query with the same linear-gain nDCG calculation.
+
+```sh
+cargo run --example trec_ndcg_change -- qrels.txt before.run after.run QUERY_ID 10
+```
+
+The rows list the relevance grade, both ranks, and the signed contribution to
+the query's score change. A dash means the run omitted the document. The same
+breakdown is available in Rust as `trec::explain_ndcg_change`.
+
 ## Diagnostics
 
 The `diagnostics` module (`diagnose`, `overlap_ratio`, `complementarity`, `rank_correlation`) helps decide whether fusion is beneficial, based on Louis et al., "Know When to Fuse" (COLING 2025).
