@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "fearless_simd"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "629c9d6b6f30b5604089e0980f4d924a013aacb1654a6cdf5d3d852224f68651"
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10,9 +16,12 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "innr"
-version = "0.6.3"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e9249654a6983ff61fa7168f3adc27c0fcaac563b6ac3a9fef1d84342e26bb9"
+checksum = "3e8707edcc168f914b4b63204d3ea8c3f5cfdb7b5e985fe998a35dce85926e28"
+dependencies = [
+ "fearless_simd",
+]
 
 [[package]]
 name = "libc"
@@ -109,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "rankops"
-version = "0.4.0"
+version = "0.5.1"
 dependencies = [
  "innr",
 ]
