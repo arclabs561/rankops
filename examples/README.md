@@ -9,6 +9,7 @@ and evaluate.
 | --- | --- | --- |
 | Compare fusion methods on incompatible score scales | `cargo run --release --example fusion` | fused rankings and method scores |
 | Run a hybrid-search loop | `cargo run --release --example hybrid_search` | source rankings, fusion diagnostics, and qrels metrics |
+| Fuse lists from real indexes | `cargo run --features composed-example --example composed_retrieval` | lexir BM25 and vicinity HNSW over one corpus, fused with RRF and scored |
 | Check collection-level IR metrics | `cargo run --release --example trec_eval` | parsed qrels/run files and collection-level means |
 | Compare metric and diagnostic APIs | `cargo run --release --example evaluate` | metric tables, diagnostics, normalization variants, and parameter search |
 | Diversify near-duplicate results | `cargo run --release --example diversity` | MMR and DPP selections |
@@ -19,6 +20,7 @@ and evaluate.
 ## Fusion and evaluation
 
 - `fusion.rs` is the shortest entry point. It compares RRF, CombMNZ, Borda, Copeland, median-rank, and runtime `FusionMethod` dispatch on two result lists with incompatible score scales.
+- `composed_retrieval.rs` builds a lexir BM25 index and a vicinity HNSW index over 24 sentences, fuses their results and scores all three. It needs the `composed-example` feature, which adds lexir and vicinity; nothing else in the crate depends on them.
 - `hybrid_search.rs` is the main workflow example. It starts from BM25 scores, dense distances, and sparse scores, then converts distances, diagnoses complementarity, fuses runs, and evaluates the result.
 - `evaluate.rs` expands the same idea into metric comparison, diagnostics, normalization variants, and fusion-parameter search.
 - `trec_eval.rs` parses qrels and run files, then reports collection-level means.
