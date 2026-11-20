@@ -294,7 +294,8 @@ fn record(line: usize, kind: &'static str, error: TrecRecordError) -> TrecParseE
 fn sort_results(results: &mut [TrecResult]) {
     results.sort_by(|a, b| {
         b.score
-            .total_cmp(&a.score)
+            .partial_cmp(&a.score)
+            .expect("validated TREC scores are finite")
             .then_with(|| b.document_id.cmp(&a.document_id))
     });
 }
@@ -850,12 +851,12 @@ mod tests {
             TrecRunEntry {
                 query_id: "q".into(),
                 document_id: "a".into(),
-                score: 1.0,
+                score: 0.0,
             },
             TrecRunEntry {
                 query_id: "q".into(),
                 document_id: "b".into(),
-                score: 1.0,
+                score: -0.0,
             },
         ])
         .unwrap();
