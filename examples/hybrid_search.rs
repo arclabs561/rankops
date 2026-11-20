@@ -1,7 +1,8 @@
 //! End-to-end hybrid search: BM25 + dense vector retrieval -> fusion -> rerank -> evaluate.
 //!
 //! Covers:
-//! - **Scoring**: BM25 via `rankfns` kernels
+//! - **Scoring**: hand-written BM25 and dense ranked lists (no index is built here;
+//!   `composed_retrieval.rs` produces them with lexir and vicinity)
 //! - **Fusion**: Combine BM25 and dense results via `rankops`
 //! - **Reranking**: Diversity selection via MMR
 //! - **Diagnostics**: Check if fusion is worthwhile
