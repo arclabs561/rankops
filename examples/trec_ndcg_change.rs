@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let after = parse_run(File::open(after_path)?)?;
     let rows = explain_ndcg_change(&before, &after, &qrels, id, k)
         .ok_or_else(|| format!("no qrels for query {id}"))?;
-    let delta: f64 = rows.iter().map(|c| c.ndcg_delta).sum();
+    let delta = rows.iter().fold(0.0, |total, row| total + row.ndcg_delta);
     println!("query {id}   nDCG@{k} change {delta:+.7}");
     println!("document\trelevance\tbefore\tafter\tndcg_delta");
     for row in rows {
