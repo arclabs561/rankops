@@ -154,6 +154,14 @@ Also: `compare()` for method comparison, `fuse_multi_query()` for the N-queries 
 The `rerank` module provides ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage reranking, and int8 quantization for token embeddings. It is available in every build: the default `rerank` feature computes vector operations with `innr`, and without it a local fallback is used. Optional features: `hierarchical` (ColBERT token clustering) and `serde`.
 
 ## Examples
+To see why one document moved after fusion, give the example two input runs in six-column TREC format, a query ID and a document ID.
+
+```sh
+cargo run --example trec_rrf_document -- first.run second.run QUERY_ID DOC_ID
+```
+
+It uses equal-weight reciprocal rank fusion with k=60. Pass another positive k as the last argument to match your run. Within each input, scores determine order and equal scores break by descending document ID. Equal fused scores share a range of positions. An absent document contributes zero.
+
 
 See [examples/README.md](examples/README.md) for the example list.
 

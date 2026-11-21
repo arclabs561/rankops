@@ -68,3 +68,7 @@ required-features = ["composed-example"]
 [[example]]
 name = "pareto_rerank"
 required-features = ["pareto"]
+
+[[example]]
+name = "trec_rrf_document"
+test = true
