@@ -40,7 +40,8 @@ These are the largest loss and gain by per-claim nDCG@10, breaking ties by claim
 ### Independent metric check
 
 ```sh
-git clone --branch v9.0.8 --depth 1 https://github.com/usnistgov/trec_eval.git target/trec_eval
+git clone --branch v10.0 --depth 1 https://github.com/usnistgov/trec_eval.git target/trec_eval
+git -C target/trec_eval rev-parse HEAD  # f4253652c8efd0d86ddffd0d163cc0a0f813111a
 make -C target/trec_eval
 python3 examples/scifact/compare.py target/scifact-data target/scifact-runs --trec-eval target/trec_eval/trec_eval
 ```

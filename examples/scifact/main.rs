@@ -125,3 +125,34 @@ fn main() -> Result<(), Box<dyn Error>> {
     per_query.flush()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cosine_keeps_the_lowest_document_ids_when_the_cutoff_ties() {
+        let v = unit_trigrams("milk");
+        let vectors: Vec<_> = (1..=105).rev().map(|id| (id, v.clone())).collect();
+        let ids: Vec<_> = cosine_run(&vectors, "MILK")
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(ids, (1..=100).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn cosine_uses_normalized_counts_and_skips_empty_vectors() {
+        let vectors = [
+            (1, unit_trigrams("milk")),
+            (2, unit_trigrams("milk milk")),
+            (3, unit_trigrams("")),
+        ];
+        let ranked = cosine_run(&vectors, "milk");
+        assert_eq!(ranked.len(), 2);
+        for (_, score) in ranked {
+            assert!((score - 1.0).abs() < 1e-6);
+        }
+        assert!(cosine_run(&vectors, "...").is_empty());
+    }
+}
