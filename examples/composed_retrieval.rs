@@ -23,7 +23,9 @@ use rankops::{ndcg_at_k, recall_at_k, rrf, Qrels};
 use std::collections::HashMap;
 use vicinity::hnsw::HNSWIndex;
 
-const DIM: usize = 256;
+#[path = "support/trigrams.rs"]
+mod trigrams;
+use trigrams::{embed, tokens, DIM};
 const K: usize = 5;
 
 const DOCS: &[&str] = &[
@@ -76,30 +78,6 @@ const QUERIES: &[(&str, &[(u32, u32)])] = &[
         &[(16, 2), (18, 2), (19, 1), (17, 1)],
     ),
 ];
-
-fn tokens(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .map(str::to_lowercase)
-        .collect()
-}
-
-/// Hashed bag of character trigrams, L2-normalised by the index on insert.
-fn embed(text: &str) -> Vec<f32> {
-    let mut v = vec![0.0f32; DIM];
-    for token in tokens(text) {
-        let padded: Vec<char> = format!("  {token} ").chars().collect();
-        for gram in padded.windows(3) {
-            // FNV-1a over the trigram.
-            let mut h: u64 = 0xcbf29ce484222325;
-            for c in gram {
-                h = (h ^ *c as u64).wrapping_mul(0x100000001b3);
-            }
-            v[(h % DIM as u64) as usize] += 1.0;
-        }
-    }
-    v
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Index the corpus twice: once lexically, once as vectors.

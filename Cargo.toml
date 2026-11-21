@@ -62,5 +62,9 @@ name = "composed_retrieval"
 required-features = ["composed-example"]
 
 [[example]]
+name = "scifact"
+required-features = ["composed-example"]
+
+[[example]]
 name = "pareto_rerank"
 required-features = ["pareto"]
