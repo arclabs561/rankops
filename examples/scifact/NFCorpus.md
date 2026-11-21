@@ -40,3 +40,15 @@ python3 examples/scifact/compare.py target/nf-data target/nf-runs --trec-eval ta
 ```
 
 Rankops and NIST agreed on all 2,916 values to four decimal places across nDCG@10, Recall@10 and Recall@100. Two full replays produced byte-identical TREC runs and per-query tables.
+
+### What if only the highest grade counts?
+
+Only 119 of the 323 queries have a grade-2 judgment. On those queries, BM25 and RRF had nearly identical grade-2 recall at 100 (0.5627 and 0.5629). At ten, BM25 retrieved more of that evidence (0.3322 versus 0.2642). This changes both the relevance threshold and the population being averaged. It provides a second check on the apparent recall gain.
+
+```sh
+awk '$4 == 2' target/nf-data/qrels.trec > target/nf-data/grade2.trec
+for run in bm25 rrf; do
+  echo "$run"
+  target/trec_eval/trec_eval -c -m recall.10,100 target/nf-data/grade2.trec "target/nf-runs/$run.run"
+done
+```
