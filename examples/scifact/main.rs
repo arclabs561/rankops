@@ -1,4 +1,4 @@
-//! Score three first-stage runs on BEIR SciFact. Input preparation, dataset
+//! Score three first-stage runs on prepared BEIR collections. Input preparation, dataset
 //! revisions and the independent evaluator command are in README.md.
 #[path = "../support/trigrams.rs"]
 mod trigrams;
@@ -14,14 +14,24 @@ use trigrams::{embed, tokens};
 const DEPTH: usize = 100;
 const METHODS: [&str; 3] = ["bm25", "trigram", "rrf"];
 
-fn texts(path: &Path) -> Result<Vec<(u32, String)>, Box<dyn Error>> {
+fn texts(path: &Path) -> Result<Vec<(String, String)>, Box<dyn Error>> {
     let mut rows = Vec::new();
     for line in BufReader::new(File::open(path)?).lines() {
         let line = line?;
         let (id, text) = line.split_once('\t').ok_or("expected id and text")?;
-        rows.push((id.parse()?, text.to_owned()));
+        rows.push((id.to_owned(), text.to_owned()));
     }
     Ok(rows)
+}
+
+// Both collections use a fixed prefix (empty for SciFact) and an unpadded
+// decimal suffix. Length, then bytes, orders their native IDs by number.
+fn order_corpus(corpus: &mut [(String, String)]) -> Result<(), Box<dyn Error>> {
+    corpus.sort_unstable_by(|a, b| a.0.len().cmp(&b.0.len()).then_with(|| a.0.cmp(&b.0)));
+    if corpus.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("duplicate corpus ID".into());
+    }
+    Ok(())
 }
 
 fn unit_trigrams(text: &str) -> Vec<f32> {
@@ -62,9 +72,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&out)?;
     let mut index = InvertedIndex::new();
     let mut vectors = Vec::new();
-    for (id, text) in texts(&data.join("corpus.tsv"))? {
+    let mut corpus = texts(&data.join("corpus.tsv"))?;
+    order_corpus(&mut corpus)?;
+    let mut doc_ids = Vec::with_capacity(corpus.len());
+    for (index_id, (external_id, text)) in corpus.into_iter().enumerate() {
+        let id = u32::try_from(index_id)?;
         index.add_document(id, &tokens(&text));
         vectors.push((id, unit_trigrams(&text)));
+        doc_ids.push(external_id);
     }
     let qrels = parse_qrels(File::open(data.join("qrels.trec"))?)?;
     let queries = texts(&data.join("queries.tsv"))?;
@@ -85,7 +100,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             for (i, (doc, _)) in hits.iter().take(DEPTH).enumerate() {
                 // TREC readers order by score. Strict monotonic scores preserve
                 // the retriever's ranking even when its native scores tie.
-                writeln!(file, "{qid} Q0 {doc} {} {} {method}", i + 1, DEPTH - i)?;
+                let external_id = &doc_ids[*doc as usize];
+                writeln!(
+                    file,
+                    "{qid} Q0 {external_id} {} {} {method}",
+                    i + 1,
+                    DEPTH - i
+                )?;
             }
         }
     }
@@ -129,6 +150,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefixed_and_plain_ids_keep_their_numeric_tie_order() {
+        for prefix in ["", "MED-"] {
+            let mut corpus: Vec<_> = [100, 10, 2]
+                .map(|n| (format!("{prefix}{n}"), String::new()))
+                .into();
+            order_corpus(&mut corpus).unwrap();
+            let ids: Vec<_> = corpus.iter().map(|row| row.0.clone()).collect();
+            assert_eq!(ids, [2, 10, 100].map(|n| format!("{prefix}{n}")));
+            corpus.push(corpus[0].clone());
+            assert!(order_corpus(&mut corpus).is_err());
+        }
+    }
 
     #[test]
     fn cosine_keeps_the_lowest_document_ids_when_the_cutoff_ties() {

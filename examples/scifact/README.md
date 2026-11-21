@@ -2,6 +2,8 @@
 
 A system returning ten abstracts and a system handing a hundred candidates to a reranker face different decisions. This example ranks real scientific abstracts three ways, saves the full runs, and follows two claims where fusion changes which evidence the reader sees.
 
+The [NFCorpus replay](NFCorpus.md) runs the same three retrievers on a second collection with graded judgments.
+
 ## Run
 
 From the repository root, with Python 3.10+ and Rust:

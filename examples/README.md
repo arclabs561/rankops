@@ -10,7 +10,7 @@ and evaluate.
 | Compare fusion methods on incompatible score scales | `cargo run --release --example fusion` | fused rankings and method scores |
 | Run a hybrid-search loop | `cargo run --release --example hybrid_search` | source rankings, fusion diagnostics, and qrels metrics |
 | Fuse lists from real indexes | `cargo run --features composed-example --example composed_retrieval` | lexir BM25 and vicinity HNSW over one corpus, fused with RRF and scored |
-| Evaluate hybrid retrieval on 300 scientific claims | [SciFact replay](scifact/README.md) | TREC runs, per-claim gains/losses, candidate coverage and a NIST cross-check |
+| Evaluate hybrid retrieval on judged collections | [SciFact](scifact/README.md) · [NFCorpus](scifact/NFCorpus.md) | TREC runs, paired changes per query, candidate coverage and a NIST cross-check |
 | Check collection-level IR metrics | `cargo run --release --example trec_eval` | parsed qrels/run files and collection-level means |
 | Compare metric and diagnostic APIs | `cargo run --release --example evaluate` | metric tables, diagnostics, normalization variants, and parameter search |
 | Diversify near-duplicate results | `cargo run --release --example diversity` | MMR and DPP selections |
@@ -35,8 +35,8 @@ and evaluate.
 
 ## Checks
 
-The small examples run on inline data. The optional SciFact replay downloads a
-checksummed collection on first use. When changing an example, run at least:
+The small examples run on inline data. The optional BEIR examples download the
+selected checksummed collection on first use. When changing an example, run at least:
 
 ```sh
 cargo build --examples --all-features
