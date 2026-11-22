@@ -79,6 +79,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+      - name: Check evaluation inputs
+        run: python -m unittest discover -s examples/scifact -p test_compare.py
       - name: Build and test Python bindings
         working-directory: rankops-python
         run: |
