@@ -14,6 +14,10 @@ def compare(data, runs, trec_eval):
     metrics = defaultdict(dict)
     with (runs / "per-query.tsv").open(encoding="utf-8") as file:
         for row in csv.DictReader(file, delimiter="\t"):
+            for key in ("ndcg10", "recall10", "recall100"):
+                value = float(row[key])
+                if not 0 <= value <= 1:
+                    raise ValueError(f"{row['method']}, {row['qid']}, {key}: invalid score {value}")
             metrics[row["qid"]][row["method"]] = row
     gain = {q: float(v["rrf"]["ndcg10"]) - float(v["bm25"]["ndcg10"]) for q, v in metrics.items()}
     for measure in ("ndcg10", "recall100"):
@@ -63,7 +67,7 @@ def compare(data, runs, trec_eval):
                 key = keys[measure]
                 value = (mean(float(v[method][key]) for v in metrics.values())
                          if q == "all" else float(metrics[q][method][key]))
-                if abs(value - float(expected)) > 0.0000500001:
+                if not abs(value - float(expected)) <= 0.0000500001:
                     raise ValueError(f"{method}, {q}, {measure}: rankops={value}, NIST={expected}")
                 seen.add((q, measure))
             if len(seen) != (len(metrics) + 1) * len(keys):
