@@ -25,7 +25,7 @@ include = [
 [dependencies]
 serde = { version = "1.0", optional = true, features = ["derive"] }
 # SIMD primitives for reranking (MaxSim/ColBERT)
-innr = { version = "0.6", optional = true }
+innr = { version = "0.7", optional = true }
 # Hierarchical clustering for ColBERT (optional)
 kodama = { version = "0.3", optional = true }
 # Pareto frontier for multi-objective reranking (optional)
