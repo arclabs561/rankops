@@ -33,7 +33,7 @@ use ::rankops::validate::{
 use ::rankops::{
     additive_multi_task_with_config, borda_multi, borda_with_config, combmnz_multi,
     combmnz_with_config, combsum_multi, combsum_with_config, dbsf_multi, dbsf_with_config,
-    isr_multi, isr_with_config, rrf_multi, rrf_with_config, standardized_multi,
+    isr_multi, isr_with_config, rrf_multi, rrf_weighted, rrf_with_config, standardized_multi,
     standardized_with_config, weighted, AdditiveMultiTaskConfig, FusionConfig, Normalization,
     RrfConfig, StandardizedConfig, WeightedConfig,
 };
@@ -61,6 +61,7 @@ pub fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Rank-based fusion
     m.add_function(wrap_pyfunction!(rrf_py, m)?)?;
     m.add_function(wrap_pyfunction!(rrf_multi_py, m)?)?;
+    m.add_function(wrap_pyfunction!(rrf_weighted_py, m)?)?;
     m.add_function(wrap_pyfunction!(isr_py, m)?)?;
     m.add_function(wrap_pyfunction!(isr_multi_py, m)?)?;
     m.add_function(wrap_pyfunction!(borda_py, m)?)?;
@@ -124,6 +125,7 @@ pub fn register(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Reranking: Diversity
     m.add_function(wrap_pyfunction!(mmr_py, m)?)?;
+    m.add_function(wrap_pyfunction!(mmr_similarity_py, m)?)?;
     m.add_function(wrap_pyfunction!(dpp_py, m)?)?;
 
     // Reranking: Matryoshka
@@ -258,23 +260,28 @@ fn rrf_py(
 /// * `lists`: List of lists, each containing (id, score) tuples
 /// * `k`: Smoothing constant (default: 60)
 /// * `top_k`: Maximum number of results to return (default: None = all)
+/// * `tie_break`: How equal fused scores are ordered. `None` keeps the
+///   library's identifier-hash order; `"id"` orders ties by ascending id,
+///   applied before `top_k` cuts the list.
 ///
 /// # Returns
 /// List of (id, score) tuples sorted by fused score (descending)
 #[allow(deprecated)]
 #[pyfunction(name = "rrf_multi")]
-#[pyo3(signature = (lists, k = 60, top_k = None))]
+#[pyo3(signature = (lists, k = 60, top_k = None, tie_break = None))]
 fn rrf_multi_py(
     py: Python<'_>,
     lists: &Bound<'_, PyList>,
     k: u32,
     top_k: Option<usize>,
+    tie_break: Option<&str>,
 ) -> PyResult<Py<PyList>> {
     if k == 0 {
         return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
             "k must be >= 1 to avoid division by zero",
         ));
     }
+    let by_id = parse_tie_break(tie_break)?;
     // Convert Python lists to Rust Vec<Vec<(String, f32)>>
     let mut rust_lists = Vec::new();
     for list in lists.iter() {
@@ -285,18 +292,93 @@ fn rrf_multi_py(
     // Convert to slice of slices for Rust API
     let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
 
-    // Call Rust function
+    // Call Rust function. An id tie-break must see every fused item before
+    // `top_k` cuts the list, so the cut moves after the sort.
     let mut config = RrfConfig::new(k);
-    if let Some(k) = top_k {
+    if let (Some(k), false) = (top_k, by_id) {
         config = config.with_top_k(k);
     }
-    let fused = rrf_multi(&slices, config);
+    let mut fused = rrf_multi(&slices, config);
+    if by_id {
+        sort_ties_by_id(&mut fused, top_k);
+    }
 
     // Convert back to Python list
     let result = PyList::empty(py);
     for (id, score) in fused {
         let tuple = make_result_tuple(py, id, score)?;
         result.append(tuple)?;
+    }
+    Ok(result.into())
+}
+
+/// Parse the `tie_break` argument shared by the fusion functions.
+fn parse_tie_break(tie_break: Option<&str>) -> PyResult<bool> {
+    match tie_break {
+        None => Ok(false),
+        Some("id") => Ok(true),
+        Some(other) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "tie_break must be None or \"id\", got {other:?}"
+        ))),
+    }
+}
+
+/// Order equal scores by ascending id, then keep the first `top_k` results.
+fn sort_ties_by_id(results: &mut Vec<(String, f32)>, top_k: Option<usize>) {
+    results.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    if let Some(k) = top_k {
+        results.truncate(k);
+    }
+}
+
+/// Weighted RRF fusion for multiple ranked lists.
+///
+/// Each list contributes `weight / (k + rank)`; scores in the input lists
+/// are ignored.
+///
+/// # Arguments
+/// * `lists`: List of lists, each containing (id, score) tuples
+/// * `weights`: One weight per list; must not all be zero
+/// * `k`: Smoothing constant (default: 60)
+/// * `top_k`: Maximum number of results to return (default: None = all)
+/// * `tie_break`: `None` keeps the library's identifier-hash order for equal
+///   scores; `"id"` orders them by ascending id before `top_k` cuts the list.
+#[pyfunction(name = "rrf_weighted")]
+#[pyo3(signature = (lists, weights, k = 60, top_k = None, tie_break = None))]
+fn rrf_weighted_py(
+    py: Python<'_>,
+    lists: &Bound<'_, PyList>,
+    weights: Vec<f32>,
+    k: u32,
+    top_k: Option<usize>,
+    tie_break: Option<&str>,
+) -> PyResult<Py<PyList>> {
+    if k == 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "k must be >= 1 to avoid division by zero",
+        ));
+    }
+    let by_id = parse_tie_break(tie_break)?;
+    let mut rust_lists = Vec::new();
+    for list in lists.iter() {
+        let py_list = list.cast::<PyList>()?;
+        rust_lists.push(py_list_to_ranked(py_list)?);
+    }
+    let slices: Vec<&[(String, f32)]> = rust_lists.iter().map(|v| v.as_slice()).collect();
+
+    let mut config = RrfConfig::new(k);
+    if let (Some(k), false) = (top_k, by_id) {
+        config = config.with_top_k(k);
+    }
+    let mut fused = rrf_weighted(&slices, &weights, config)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    if by_id {
+        sort_ties_by_id(&mut fused, top_k);
+    }
+
+    let result = PyList::empty(py);
+    for (id, score) in fused {
+        result.append(make_result_tuple(py, id, score)?)?;
     }
     Ok(result.into())
 }
@@ -1450,6 +1532,43 @@ fn mmr_py(
 ) -> PyResult<Py<PyList>> {
     let config = rerank::DiversityMmrConfig::new(lambda_, k);
     let results = rerank::diversity::mmr_cosine(&candidates, &embeddings, config);
+    let out = PyList::empty(py);
+    for (id, score) in results {
+        out.append(make_result_tuple(py, id, score)?)?;
+    }
+    Ok(out.into())
+}
+
+/// MMR diversity reranking over a precomputed pairwise similarity matrix.
+///
+/// Use this when diversity is not embedding cosine, for example tag-set
+/// Jaccard. The score is `lambda_ * relevance - (1 - lambda_) * max_similarity`,
+/// where relevance is min-max normalized to [0, 1] across the candidates.
+///
+/// Args:
+///     candidates: List of (id, score) pairs.
+///     similarity: n x n similarity matrix, row i and column j for candidates i and j.
+///     lambda_: Trade-off: 1.0 = pure relevance, 0.0 = pure diversity. Default: 0.5.
+///     k: Number of results to select.
+#[pyfunction(name = "mmr_similarity")]
+#[pyo3(signature = (candidates, similarity, lambda_ = 0.5, k = 10))]
+fn mmr_similarity_py(
+    py: Python<'_>,
+    candidates: Vec<(String, f32)>,
+    similarity: Vec<Vec<f32>>,
+    lambda_: f32,
+    k: usize,
+) -> PyResult<Py<PyList>> {
+    let n = candidates.len();
+    if similarity.len() != n || similarity.iter().any(|row| row.len() != n) {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "similarity must be {n} x {n} to match candidates"
+        )));
+    }
+    let flat: Vec<f32> = similarity.into_iter().flatten().collect();
+    let config = rerank::DiversityMmrConfig::new(lambda_, k);
+    let results = rerank::diversity::try_mmr(&candidates, &flat, config)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
     let out = PyList::empty(py);
     for (id, score) in results {
         out.append(make_result_tuple(py, id, score)?)?;

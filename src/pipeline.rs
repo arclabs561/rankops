@@ -28,8 +28,9 @@ use std::hash::Hash;
 
 /// A composable fusion pipeline.
 ///
-/// Stages: add runs -> normalize (optional) -> fuse -> top_k (optional) -> execute.
-/// Each stage returns a new pipeline, so the API is chainable.
+/// Stages: add runs -> normalize (optional) -> fuse (optional, defaults to
+/// RRF) -> top_k (optional) -> execute. Each stage returns a new pipeline, so
+/// the API is chainable.
 #[derive(Debug, Clone)]
 pub struct Pipeline<I: Clone + Eq + Hash> {
     runs: Vec<PipelineRun<I>>,
@@ -81,7 +82,8 @@ impl<I: Clone + Eq + Hash> Pipeline<I> {
         self
     }
 
-    /// Set the fusion method.
+    /// Set the fusion method. Without this call, [`Pipeline::execute`] uses
+    /// [`FusionMethod::default`] (RRF with k = 60).
     #[must_use]
     pub fn fuse(mut self, method: FusionMethod) -> Self {
         self.method = Some(method);
@@ -97,7 +99,10 @@ impl<I: Clone + Eq + Hash> Pipeline<I> {
 
     /// Execute the pipeline and return fused results.
     ///
-    /// Returns an empty list if no runs or no fusion method is set.
+    /// Returns an empty list if no runs were added. A single run goes through
+    /// the fusion method like several do, so its output is sorted and on the
+    /// method's score scale before `top_k` applies. With no fusion method
+    /// set, runs are fused with [`FusionMethod::default`] (RRF with k = 60).
     #[must_use]
     pub fn execute(&self) -> Vec<(I, f32)> {
         if self.runs.is_empty() {
@@ -118,9 +123,7 @@ impl<I: Clone + Eq + Hash> Pipeline<I> {
         let method = self.method.unwrap_or_default();
         let refs: Vec<&[(I, f32)]> = normalized.iter().map(|v| v.as_slice()).collect();
 
-        let mut fused = if refs.len() == 1 {
-            refs[0].to_vec()
-        } else if refs.len() == 2 {
+        let mut fused = if refs.len() == 2 {
             method.fuse(refs[0], refs[1])
         } else {
             method.fuse_multi(&refs)
@@ -353,6 +356,21 @@ mod tests {
 
     fn qrels() -> Qrels<&'static str> {
         HashMap::from([("d1", 2), ("d2", 1), ("d3", 1)])
+    }
+
+    #[test]
+    fn missing_fusion_method_defaults_to_rrf() {
+        let unset = Pipeline::new()
+            .add_run("bm25", &bm25())
+            .add_run("dense", &dense())
+            .execute();
+        let rrf = Pipeline::new()
+            .add_run("bm25", &bm25())
+            .add_run("dense", &dense())
+            .fuse(FusionMethod::default())
+            .execute();
+        assert!(!unset.is_empty());
+        assert_eq!(unset, rrf);
     }
 
     #[test]

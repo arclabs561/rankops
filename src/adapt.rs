@@ -1,7 +1,8 @@
 //! Adapters for converting retriever outputs into rankops input format.
 //!
 //! Retrieval systems produce results in different formats:
-//! - Vector search (vicinity, faiss): `(doc_id: u32, distance: f32)` -- lower is better
+//! - Vector search (vicinity, faiss): `(doc_id: u32, distance: f32)` -- lower is better.
+//!   Distances can be negative: vicinity's inner-product distance is `-dot`.
 //! - Lexical search (lexir, tantivy): `(doc_id, score: f32)` -- higher is better
 //! - Cross-encoders: `(doc_id, logit: f32)` -- unbounded
 //!
@@ -10,10 +11,31 @@
 
 use std::hash::Hash;
 
+/// Strictly decreasing, finite map from a distance to a positive score.
+///
+/// `1 / (1 + d)` for `d >= 0` and `1 - d` for `d < 0`. The two pieces meet at
+/// `d = 0` with value 1 and slope -1, so the map is continuous and keeps the
+/// order of any finite distances, including negative inner-product distances
+/// (`-dot`), where `1 / (1 + d)` alone flips sign at `d = -1` and divides by
+/// zero there.
+fn distance_to_score(d: f32) -> f32 {
+    if d >= 0.0 {
+        1.0 / (1.0 + d)
+    } else {
+        1.0 - d
+    }
+}
+
 /// Convert distance-based results (lower = closer) to score-based (higher = better).
 ///
-/// Uses `1 / (1 + distance)` which maps distances in [0, inf) to scores in (0, 1].
-/// Suitable for L2/Euclidean distance results from vector search.
+/// Uses `1 / (1 + distance)` for distances in [0, inf), giving scores in (0, 1].
+/// Suitable for L2/Euclidean and cosine distance results from vector search.
+///
+/// Negative distances map to `1 - distance`, a score above 1, so results stay
+/// in best-first order and every score is finite. This covers inner-product
+/// distances such as vicinity's `DistanceMetric::InnerProduct`, which returns
+/// `-dot`. The scores are an order-preserving transform, not the dot products;
+/// negate the distances and use [`from_inner_product`] to fuse raw dot products.
 ///
 /// # Example
 ///
@@ -30,7 +52,7 @@ use std::hash::Hash;
 pub fn from_distances<I: Clone + Eq + Hash>(results: &[(I, f32)]) -> Vec<(I, f32)> {
     let mut scored: Vec<(I, f32)> = results
         .iter()
-        .map(|(id, dist)| (id.clone(), 1.0 / (1.0 + dist)))
+        .map(|(id, dist)| (id.clone(), distance_to_score(*dist)))
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     scored
@@ -38,7 +60,8 @@ pub fn from_distances<I: Clone + Eq + Hash>(results: &[(I, f32)]) -> Vec<(I, f32
 
 /// Convert distance-based results with ID remapping.
 ///
-/// Maps integer doc IDs to arbitrary types using a lookup function.
+/// Maps integer doc IDs to arbitrary types using a lookup function. Scores are
+/// the same as [`from_distances`].
 ///
 /// # Example
 ///
@@ -59,7 +82,7 @@ where
 {
     let mut scored: Vec<(O, f32)> = results
         .iter()
-        .map(|(id, dist)| (map_id(id), 1.0 / (1.0 + dist)))
+        .map(|(id, dist)| (map_id(id), distance_to_score(*dist)))
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     scored
@@ -155,6 +178,57 @@ mod tests {
         // dist=9 -> score = 0.1
         assert_eq!(ranked[2].0, 3);
         assert!((ranked[2].1 - 0.1).abs() < 1e-6);
+    }
+
+    // vicinity's InnerProduct distance is -dot, so it is negative whenever
+    // dot > 0. Ascending distance is still best-first and must stay so.
+    #[test]
+    fn negative_distances_keep_best_first_order() {
+        let hits = vec![
+            (0u32, -2.0f32),
+            (1, -1.5),
+            (2, -1.2),
+            (3, -0.9),
+            (4, -0.7),
+            (5, -0.5),
+        ];
+        let ranked = from_distances(&hits);
+        let order: Vec<u32> = ranked.iter().map(|(id, _)| *id).collect();
+        assert_eq!(order, vec![0, 1, 2, 3, 4, 5], "{ranked:?}");
+        for w in ranked.windows(2) {
+            assert!(w[0].1 > w[1].1, "scores must strictly decrease: {ranked:?}");
+        }
+        assert!(ranked.iter().all(|(_, s)| s.is_finite() && *s > 0.0));
+
+        let mapped = from_distances_mapped(&hits, |id| *id);
+        assert_eq!(mapped, ranked);
+    }
+
+    // A unit-vector exact match has inner-product distance -1, where 1/(1+d)
+    // divides by zero. Its score must be finite so fusion can normalize it.
+    #[test]
+    fn exact_inner_product_match_stays_finite_through_fusion() {
+        let dense = from_distances(&[(3u32, -1.0f32), (2, -0.48), (4, -0.48), (1, 0.0), (5, 0.0)]);
+        assert_eq!(dense[0].0, 3);
+        assert!(dense.iter().all(|(_, s)| s.is_finite()), "{dense:?}");
+
+        let lexical = vec![(3u32, 7.5f32), (2, 6.0), (6, 1.0)];
+        let fused = crate::combsum(&dense, &lexical);
+        assert!(fused.iter().all(|(_, s)| s.is_finite()), "{fused:?}");
+        assert_eq!(fused[0].0, 3, "{fused:?}");
+    }
+
+    // Mixed signs around zero: the score is continuous and decreasing there.
+    #[test]
+    fn distance_score_is_monotone_across_zero() {
+        let ds = [-3.0f32, -1.0, -0.25, -1e-6, 0.0, 1e-6, 0.25, 1.0, 3.0];
+        let hits: Vec<(usize, f32)> = ds.iter().copied().enumerate().collect();
+        let ranked = from_distances(&hits);
+        let order: Vec<usize> = ranked.iter().map(|(id, _)| *id).collect();
+        assert_eq!(order, (0..ds.len()).collect::<Vec<_>>());
+        let at = |d: f32| ranked[ds.iter().position(|&x| x == d).unwrap()].1;
+        assert!((at(-1e-6) - at(0.0)).abs() < 1e-5);
+        assert!((at(1e-6) - at(0.0)).abs() < 1e-5);
     }
 
     #[test]

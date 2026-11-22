@@ -142,40 +142,47 @@ pub fn dequantize_fp16(quantized: &[u16]) -> Vec<f32> {
 
 /// Convert FP32 to FP16 (half precision).
 ///
-/// FP16 format: 1 sign bit, 5 exponent bits, 10 mantissa bits.
+/// FP16 format: 1 sign bit, 5 exponent bits, 10 mantissa bits (IEEE 754
+/// binary16). Rounds to nearest, ties to even; values below the smallest
+/// normal become subnormals, and values that round above 65504 become
+/// infinity.
 fn f32_to_fp16(value: f32) -> u16 {
-    // Simple conversion: truncate mantissa, adjust exponent
-    // This is a simplified version; full implementation would handle
-    // special cases (NaN, Inf, denormals) more carefully
     let bits = value.to_bits();
-    let sign = (bits >> 31) & 0x1;
+    let sign = ((bits >> 16) & 0x8000) as u16;
     let exponent = ((bits >> 23) & 0xFF) as i32;
-    let mantissa = bits & 0x7FFFFF;
+    let mantissa = bits & 0x007F_FFFF;
 
-    // Handle special cases
     if exponent == 0xFF {
-        // NaN or Inf
-        return ((sign << 15) | 0x7C00 | ((mantissa != 0) as u32)) as u16;
+        // Inf stays Inf; NaN stays a quiet NaN.
+        return sign | 0x7C00 | if mantissa != 0 { 0x0200 } else { 0 };
     }
 
-    if exponent == 0 {
-        // Zero or denormal
-        return (sign << 15) as u16;
-    }
-
-    // Normal number: adjust exponent bias (127 -> 15)
+    // Unbiased exponent re-biased for binary16 (127 -> 15).
     let exp_fp16 = exponent - 127 + 15;
-    if exp_fp16 < 0 {
-        // Underflow to zero
-        return (sign << 15) as u16;
-    }
-    if exp_fp16 > 31 {
-        // Overflow to Inf
-        return ((sign << 15) | 0x7C00) as u16;
+    if exp_fp16 >= 0x1F {
+        return sign | 0x7C00;
     }
 
-    // Pack: sign (1) + exponent (5) + mantissa (10 MSB)
-    ((sign << 15) | ((exp_fp16 as u32) << 10) | ((mantissa >> 13) & 0x3FF)) as u16
+    // Round `m >> shift` to nearest, ties to even.
+    let round_shift = |m: u32, shift: u32| -> u32 {
+        let kept = m >> shift;
+        let rest = m & ((1 << shift) - 1);
+        let half = 1 << (shift - 1);
+        kept + u32::from(rest > half || (rest == half && kept & 1 == 1))
+    };
+
+    if exp_fp16 <= 0 {
+        // Subnormal in binary16 (f32 subnormals land here too and round to 0).
+        if exp_fp16 < -10 {
+            return sign;
+        }
+        let m = mantissa | 0x0080_0000;
+        return sign | round_shift(m, (14 - exp_fp16) as u32) as u16;
+    }
+
+    // A mantissa carry from rounding moves into the exponent, which also
+    // turns 65520 and above into infinity.
+    sign | round_shift(((exp_fp16 as u32) << 23) | mantissa, 13) as u16
 }
 
 /// Convert FP16 (half precision) to FP32.
@@ -201,10 +208,13 @@ fn fp16_to_f32(value: u16) -> f32 {
         if mantissa == 0 {
             f32::from_bits((sign as u32) << 31)
         } else {
-            // Denormal: convert to FP32 denormal
-            let exp_fp32 = 127 - 15;
-            let mantissa_fp32 = (mantissa as u32) << 13;
-            f32::from_bits(((sign as u32) << 31) | ((exp_fp32 as u32) << 23) | mantissa_fp32)
+            // Subnormal: mantissa * 2^-24, exact in f32.
+            let magnitude = f32::from(mantissa) * f32::from_bits(0x3380_0000);
+            if sign == 1 {
+                -magnitude
+            } else {
+                magnitude
+            }
         }
     } else {
         // Normal number: adjust exponent bias (15 -> 127)

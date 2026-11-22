@@ -39,7 +39,8 @@ fused = rankops.rrf(bm25, dense, k=60)
 # doc_1 and doc_2 tie at 1/61 + 1/62 = 0.033; doc_3 and doc_4 get 1/63 = 0.016
 ```
 
-**Why RRF?** BM25 scores are 0-100, dense scores are 0-1. RRF ignores scores and uses only rank positions, so no normalization needed.
+RRF uses rank positions rather than scores, so the input lists need not share a
+score scale. BM25 scores are not bounded to a fixed range.
 
 ## TREC evaluation
 
@@ -49,8 +50,8 @@ metrics. Invalid records, duplicate documents, and non-finite run scores raise
 
 ```python
 summary = rankops.evaluate_trec(
-    "q1 0 doc_1 1\\n",
-    "q1 Q0 doc_1 1 12.5 run\\n",
+    "q1 0 doc_1 1\n",
+    "q1 Q0 doc_1 1 12.5 run\n",
     k=10,
 )
 assert summary["ndcg_at_k"] == 1.0
@@ -78,16 +79,16 @@ fused = rankops.rrf(bm25, dense, k=60, top_k=10)
 fused = rankops.rrf_multi([bm25, dense, sparse], k=60, top_k=10)
 ```
 
-**When to use**: Different score scales (BM25: 0-100, dense: 0-1), zero-configuration needs.
+**When to use**: Rankings whose scores are not directly comparable.
 
-#### ISR (Inverse Square Root rank)
+#### ISR (Inverse square rank)
 
 ```python
 fused = rankops.isr(bm25, dense, k=1, top_k=10)
 fused = rankops.isr_multi([bm25, dense], k=1, top_k=10)
 ```
 
-**When to use**: When lower ranks should contribute more relative to top positions.
+**When to use**: When top-ranked results should contribute more sharply than in RRF.
 
 #### Borda Count
 
@@ -100,7 +101,8 @@ fused = rankops.borda_multi([bm25, dense], top_k=10)
 
 ### Score-based Fusion (uses scores)
 
-These methods require scores on compatible scales:
+These methods use score magnitudes. CombSUM and CombMNZ normalize each input
+list to `[0, 1]`; weighted fusion lets you choose whether to normalize.
 
 #### CombSUM
 
@@ -109,7 +111,7 @@ fused = rankops.combsum(bm25, dense, top_k=10)
 fused = rankops.combsum_multi([bm25, dense], top_k=10)
 ```
 
-**When to use**: Scores on the same scale (both 0-1, both cosine similarity).
+**When to use**: Score differences within each list should affect the result.
 
 #### CombMNZ
 
@@ -118,7 +120,7 @@ fused = rankops.combmnz(bm25, dense, top_k=10)
 fused = rankops.combmnz_multi([bm25, dense], top_k=10)
 ```
 
-**When to use**: Same scale as CombSUM, but want to reward documents appearing in multiple lists.
+**When to use**: Reward documents that appear in multiple lists.
 
 #### Weighted Fusion
 

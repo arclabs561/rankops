@@ -8,20 +8,11 @@
 //!
 //! Requires the `pareto` feature: `rankops = { features = ["pareto"] }`
 
+use pare::{Direction, ParetoFrontier};
+use rankops::{ndcg_at_k, rrf, Qrels};
+use std::collections::HashMap;
+
 fn main() {
-    #[cfg(feature = "pareto")]
-    pareto_demo();
-
-    #[cfg(not(feature = "pareto"))]
-    eprintln!("This example requires the `pareto` feature: cargo run --example pareto_rerank --features pareto");
-}
-
-#[cfg(feature = "pareto")]
-fn pareto_demo() {
-    use pare::{Direction, ParetoFrontier};
-    use rankops::{ndcg_at_k, rrf, Qrels};
-    use std::collections::HashMap;
-
     println!("=== Pareto-Optimal Reranking ===\n");
 
     // Two retrievers with different strengths

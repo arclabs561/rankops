@@ -294,7 +294,8 @@ fn record(line: usize, kind: &'static str, error: TrecRecordError) -> TrecParseE
 fn sort_results(results: &mut [TrecResult]) {
     results.sort_by(|a, b| {
         b.score
-            .total_cmp(&a.score)
+            .partial_cmp(&a.score)
+            .expect("validated TREC scores are finite")
             .then_with(|| b.document_id.cmp(&a.document_id))
     });
 }
@@ -523,6 +524,26 @@ fn gain(rel: i64) -> f64 {
     rel.max(0) as f64
 }
 
+fn discounted_gain(gain: f64, rank: usize) -> f64 {
+    gain / ((rank + 1) as f64).log2()
+}
+
+fn ideal_dcg(qrels: &BTreeMap<DocId, i64>, k: usize) -> f64 {
+    let mut ideal: Vec<_> = qrels
+        .values()
+        .copied()
+        .map(gain)
+        .filter(|gain| *gain > 0.0)
+        .collect();
+    ideal.sort_by(|a, b| b.total_cmp(a));
+    ideal
+        .into_iter()
+        .take(k)
+        .enumerate()
+        .map(|(i, value)| discounted_gain(value, i + 1))
+        .sum()
+}
+
 fn ndcg(results: &[TrecResult], qrels: &BTreeMap<DocId, i64>, config: TrecEvalConfig) -> f64 {
     let limit = config.max_docs_per_query.unwrap_or(usize::MAX);
     let dcg: f64 = results
@@ -531,27 +552,89 @@ fn ndcg(results: &[TrecResult], qrels: &BTreeMap<DocId, i64>, config: TrecEvalCo
         .take(config.k)
         .enumerate()
         .map(|(i, result)| {
-            gain(*qrels.get(&result.document_id).unwrap_or(&0)) / ((i + 2) as f64).log2()
+            discounted_gain(gain(*qrels.get(&result.document_id).unwrap_or(&0)), i + 1)
         })
         .sum();
-    let mut ideal: Vec<_> = qrels
-        .values()
-        .copied()
-        .map(gain)
-        .filter(|gain| *gain > 0.0)
-        .collect();
-    ideal.sort_by(|a, b| b.total_cmp(a));
-    let idcg: f64 = ideal
-        .into_iter()
-        .take(config.k)
-        .enumerate()
-        .map(|(i, value)| value / ((i + 2) as f64).log2())
-        .sum();
+    let idcg = ideal_dcg(qrels, config.k);
     if idcg == 0.0 {
         0.0
     } else {
         dcg / idcg
     }
+}
+
+/// One judged document's contribution to a change in linear-gain nDCG@k.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrecNdcgChange {
+    /// Document identifier from the qrels.
+    pub document_id: DocId,
+    /// Graded relevance from the qrels.
+    pub relevance: i64,
+    /// One-based position in the full first run, including positions below k.
+    /// None if the document was not returned.
+    pub before_rank: Option<usize>,
+    /// One-based position in the full second run, or None if absent.
+    pub after_rank: Option<usize>,
+    /// This document's normalized discounted gain in the second run minus the first.
+    pub ndcg_delta: f64,
+}
+
+/// Explain the difference between two runs' default nDCG@k on a single query.
+///
+/// Returns rows with nonzero contributions, largest absolute change first
+/// (document ID breaks ties). Their sum equals the per-query change from
+/// [`evaluate_detailed`] up to floating-point rounding. Missing run queries
+/// contribute zero. An unknown qrels query returns `None`.
+#[must_use]
+pub fn explain_ndcg_change(
+    before: &TrecRun,
+    after: &TrecRun,
+    qrels: &TrecQrels,
+    query_id: &str,
+    k: usize,
+) -> Option<Vec<TrecNdcgChange>> {
+    let judgments = qrels.judgments(query_id)?;
+    let ideal = ideal_dcg(judgments, k);
+    if ideal == 0.0 {
+        return Some(Vec::new());
+    }
+
+    fn ranks<'a>(run: &'a TrecRun, query_id: &str) -> BTreeMap<&'a str, usize> {
+        run.results(query_id)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(i, doc)| (doc.document_id(), i + 1))
+            .collect()
+    }
+    let before_ranks = ranks(before, query_id);
+    let after_ranks = ranks(after, query_id);
+    let mut changes = Vec::new();
+    for (id, &rel) in judgments {
+        let before_rank = before_ranks.get(id.as_str()).copied();
+        let after_rank = after_ranks.get(id.as_str()).copied();
+        let contribution = |rank: Option<usize>| {
+            rank.filter(|&r| r <= k)
+                .map_or(0.0, |r| discounted_gain(gain(rel), r) / ideal)
+        };
+        let ndcg_delta = contribution(after_rank) - contribution(before_rank);
+        if ndcg_delta != 0.0 {
+            changes.push(TrecNdcgChange {
+                document_id: id.clone(),
+                relevance: rel,
+                before_rank,
+                after_rank,
+                ndcg_delta,
+            });
+        }
+    }
+    changes.sort_by(|a, b| {
+        b.ndcg_delta
+            .abs()
+            .total_cmp(&a.ndcg_delta.abs())
+            .then_with(|| a.document_id.cmp(&b.document_id))
+    });
+    Some(changes)
 }
 
 fn metrics(
@@ -768,12 +851,12 @@ mod tests {
             TrecRunEntry {
                 query_id: "q".into(),
                 document_id: "a".into(),
-                score: 1.0,
+                score: 0.0,
             },
             TrecRunEntry {
                 query_id: "q".into(),
                 document_id: "b".into(),
-                score: 1.0,
+                score: -0.0,
             },
         ])
         .unwrap();

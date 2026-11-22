@@ -49,7 +49,7 @@
 //! fusion (`CombSUM`), but ~1-2% faster. RRF excels when score scales are
 //! incompatible or unknown. See [OpenSearch RRF blog](https://opensearch.org/blog/introducing-reciprocal-rank-fusion-hybrid-search/).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 /// Compiles and runs the README's Rust examples as doctests.
@@ -140,8 +140,12 @@ const SCORE_RANGE_EPSILON: f32 = 1e-9;
 pub struct RrfConfig {
     /// Smoothing constant (default: 60).
     ///
-    /// **Must be >= 1** to avoid division by zero in the RRF formula.
-    /// Values < 1 will cause panics during fusion.
+    /// **Must be >= 1.** [`RrfConfig::new`] and [`RrfConfig::with_k`] panic on
+    /// 0. A config built with `k: 0` directly is rejected at fusion time: the
+    /// infallible functions ([`rrf_with_config`], [`rrf_multi`],
+    /// [`isr_with_config`], [`isr_multi`], [`rrf_explain`],
+    /// [`FusionMethod::fuse`], [`FusionMethod::fuse_multi`]) return an empty
+    /// list, and [`rrf_weighted`] returns [`FusionError::InvalidConfig`].
     pub k: u32,
     /// Maximum results to return (None = all).
     pub top_k: Option<usize>,
@@ -158,7 +162,7 @@ impl RrfConfig {
     ///
     /// # Panics
     ///
-    /// Panics if `k == 0` (would cause division by zero in RRF formula).
+    /// Panics if `k == 0` (see [`RrfConfig::k`]).
     ///
     /// # Example
     ///
@@ -184,7 +188,7 @@ impl RrfConfig {
     ///
     /// # Panics
     ///
-    /// Panics if `k == 0` (would cause division by zero in RRF formula).
+    /// Panics if `k == 0` (see [`RrfConfig::k`]).
     #[must_use]
     pub fn with_k(mut self, k: u32) -> Self {
         assert!(
@@ -536,7 +540,8 @@ impl FusionMethod {
     /// * `b` - Second ranked list (ID, score pairs)
     ///
     /// # Returns
-    /// Combined list sorted by fused score (descending)
+    /// Combined list sorted by fused score (descending). `Rrf { k: 0 }` and
+    /// `Isr { k: 0 }` return an empty list (see [`RrfConfig::k`]).
     #[must_use]
     pub fn fuse<I: Clone + Eq + Hash>(&self, a: &[(I, f32)], b: &[(I, f32)]) -> Vec<(I, f32)> {
         match self {
@@ -596,7 +601,8 @@ impl FusionMethod {
     /// * `lists` - Slice of ranked lists
     ///
     /// # Returns
-    /// Combined list sorted by fused score (descending)
+    /// Combined list sorted by fused score (descending). `Rrf { k: 0 }` and
+    /// `Isr { k: 0 }` return an empty list (see [`RrfConfig::k`]).
     #[must_use]
     pub fn fuse_multi<I, L>(&self, lists: &[L]) -> Vec<(I, f32)>
     where
@@ -683,7 +689,8 @@ impl FusionMethod {
 /// `RRF(d) = Σ 1/(k + rank_r(d))` where:
 /// - `k` = smoothing constant (default: 60)
 /// - `rank_r(d)` = position of document d in ranking r (1-indexed: the top
-///   document has rank 1, as in Cormack, Clarke & Büttcher 2009)
+///   document has rank 1, as in Cormack, Clarke & Büttcher 2009). A document
+///   repeated within one ranking contributes once, at its first (best) rank.
 ///
 /// # Why RRF?
 ///
@@ -786,21 +793,20 @@ pub fn rrf_with_config<I: Clone + Eq + Hash>(
     let estimated_size = results_a.len() + results_b.len();
     let mut scores: HashMap<I, f32> = HashMap::with_capacity(estimated_size);
 
-    // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
-    for (rank, (id, _)) in results_a.iter().enumerate() {
-        let contribution = 1.0 / (k + (rank + 1) as f32);
-        if let Some(score) = scores.get_mut(id) {
-            *score += contribution;
-        } else {
-            scores.insert(id.clone(), contribution);
-        }
-    }
-    for (rank, (id, _)) in results_b.iter().enumerate() {
-        let contribution = 1.0 / (k + (rank + 1) as f32);
-        if let Some(score) = scores.get_mut(id) {
-            *score += contribution;
-        } else {
-            scores.insert(id.clone(), contribution);
+    // A repeated id within one list counts once, at its first (best) rank.
+    for results in [results_a, results_b] {
+        let mut seen: HashSet<&I> = HashSet::with_capacity(results.len());
+        for (rank, (id, _)) in results.iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let contribution = 1.0 / (k + (rank + 1) as f32);
+            // get_mut + insert avoids cloning IDs when the entry already exists
+            if let Some(score) = scores.get_mut(id) {
+                *score += contribution;
+            } else {
+                scores.insert(id.clone(), contribution);
+            }
         }
     }
 
@@ -840,7 +846,12 @@ where
 
     // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
     for list in lists {
+        // A repeated id within one list counts once, at its first (best) rank.
+        let mut seen: HashSet<&I> = HashSet::with_capacity(list.as_ref().len());
         for (rank, (id, _)) in list.as_ref().iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
             let contribution = 1.0 / (k + (rank + 1) as f32);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
@@ -877,7 +888,8 @@ where
 /// # Errors
 ///
 /// - Returns [`FusionError::ZeroWeights`] if weights sum to zero.
-/// - Returns [`FusionError::InvalidConfig`] if `lists.len() != weights.len()`.
+/// - Returns [`FusionError::InvalidConfig`] if `lists.len() != weights.len()`
+///   or `config.k == 0`.
 #[allow(clippy::cast_precision_loss)]
 pub fn rrf_weighted<I, L>(lists: &[L], weights: &[f32], config: RrfConfig) -> Result<Vec<(I, f32)>>
 where
@@ -895,6 +907,11 @@ where
     if weight_sum.abs() < WEIGHT_EPSILON {
         return Err(FusionError::ZeroWeights);
     }
+    if config.k == 0 {
+        return Err(FusionError::InvalidConfig(
+            "k must be >= 1 (see RrfConfig::k)".to_string(),
+        ));
+    }
 
     let k = config.k as f32;
     // Pre-allocate capacity
@@ -903,7 +920,12 @@ where
 
     for (list, &weight) in lists.iter().zip(weights.iter()) {
         let normalized_weight = weight / weight_sum;
+        // A repeated id within one list counts once, at its first (best) rank.
+        let mut seen: HashSet<&I> = HashSet::with_capacity(list.as_ref().len());
         for (rank, (id, _)) in list.as_ref().iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
             let contribution = normalized_weight / (k + (rank + 1) as f32);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
@@ -1131,13 +1153,13 @@ where
     for (list, weight) in lists {
         let items = list.as_ref();
         let w = weight / total_weight;
-        let (norm, off) = if normalize {
+        let (norm, off, base) = if normalize {
             min_max_params(items)
         } else {
-            (1.0, 0.0)
+            (1.0, 0.0, 0.0)
         };
         for (id, s) in items {
-            let contribution = w * (s - off) * norm;
+            let contribution = w * ((s - off) * norm + base);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -1166,13 +1188,13 @@ where
     for (list, weight) in lists {
         let items = list.as_ref();
         let w = weight / total_weight;
-        let (norm, off) = if normalize {
+        let (norm, off, base) = if normalize {
             min_max_params(items)
         } else {
-            (1.0, 0.0)
+            (1.0, 0.0, 0.0)
         };
         for (id, s) in items {
-            let contribution = w * (s - off) * norm;
+            let contribution = w * ((s - off) * norm + base);
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -1287,9 +1309,9 @@ where
 
     for list in lists {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (id, s) in items {
-            let contribution = (s - off) * norm;
+            let contribution = (s - off) * norm + base;
             if let Some(score) = scores.get_mut(id) {
                 *score += contribution;
             } else {
@@ -1398,10 +1420,10 @@ where
 
     for list in lists {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (id, s) in items {
             // Use get_mut + insert pattern to avoid cloning IDs when entry already exists
-            let contribution = (s - off) * norm;
+            let contribution = (s - off) * norm + base;
             if let Some(entry) = scores.get_mut(id) {
                 entry.0 += contribution;
                 entry.1 += 1;
@@ -1558,8 +1580,9 @@ where
 ///
 /// For each list:
 /// 1. Compute mean (μ) and standard deviation (σ)
-/// 2. Normalize: `z = (score - μ) / σ`, clipped to [-3, 3]
-/// 3. Sum normalized z-scores across lists
+/// 2. Normalize: `(score - (μ - 3σ)) / 6σ`, clipped to [0, 1] (the z-score
+///    clipped to [-3, 3] and shifted so the list's floor maps to 0)
+/// 3. Sum normalized scores across lists; a document absent from a list gets 0
 ///
 /// The ±3σ clipping prevents extreme outliers from dominating the fusion.
 ///
@@ -1570,8 +1593,8 @@ where
 ///
 /// # Returns
 ///
-/// Fused ranking sorted by combined z-score (descending). Documents with
-/// consistently high z-scores across lists rank highest.
+/// Fused ranking sorted by combined normalized score (descending). Because an
+/// absent document contributes 0, appearing in more lists raises the score.
 ///
 /// # Example
 ///
@@ -1585,8 +1608,9 @@ where
 /// let dense = vec![("d2", 0.9), ("d3", 0.7), ("d4", 0.5)];
 ///
 /// let fused = dbsf(&bm25, &dense);
-/// // Z-scores normalize both lists to comparable scales
 /// // d2 and d3 appear in both lists, so they rank highest
+/// let order: Vec<&str> = fused.iter().map(|(d, _)| *d).collect();
+/// assert_eq!(order, ["d2", "d3", "d1", "d4"]);
 /// ```
 ///
 /// # Performance
@@ -1617,7 +1641,8 @@ where
 ///
 /// - DBSF uses fixed [-3, 3] clipping
 /// - Standardized allows configurable clipping range
-/// - Both use the same z-score approach
+/// - Standardized sums raw z-scores, so an absent document counts as the
+///   list mean; DBSF shifts to [0, 1], so an absent document counts as the floor
 #[must_use]
 pub fn dbsf<I: Clone + Eq + Hash>(results_a: &[(I, f32)], results_b: &[(I, f32)]) -> Vec<(I, f32)> {
     dbsf_with_config(results_a, results_b, FusionConfig::default())
@@ -1634,19 +1659,35 @@ pub fn dbsf_with_config<I: Clone + Eq + Hash>(
 }
 
 /// DBSF for 3+ result lists.
-///
-/// Delegates to [`standardized_multi`] with the DBSF default clip range [-3, 3].
 #[must_use]
 pub fn dbsf_multi<I, L>(lists: &[L], config: FusionConfig) -> Vec<(I, f32)>
 where
     I: Clone + Eq + Hash,
     L: AsRef<[(I, f32)]>,
 {
-    let std_config = StandardizedConfig {
-        clip_range: (-3.0, 3.0),
-        top_k: config.top_k,
-    };
-    standardized_multi(lists, std_config)
+    let estimated_size: usize = lists.iter().map(|l| l.as_ref().len()).sum();
+    let mut scores: HashMap<I, f32> = HashMap::with_capacity(estimated_size);
+    for list in lists {
+        let items = list.as_ref();
+        let (mean, std) = zscore_params(items);
+        for (id, s) in items {
+            *scores.entry(id.clone()).or_insert(0.0) += dbsf_normalize(*s, mean, std);
+        }
+    }
+    finalize(scores, config.top_k)
+}
+
+/// Map a score into [0, 1] by its list's `[μ - 3σ, μ + 3σ]` range.
+///
+/// A constant list (σ = 0) maps to 0.5, the midpoint, so presence still
+/// counts for more than absence (0).
+#[inline]
+fn dbsf_normalize(score: f32, mean: f32, std: f32) -> f32 {
+    if std > SCORE_RANGE_EPSILON {
+        ((score - mean) / std).clamp(-3.0, 3.0) / 6.0 + 0.5
+    } else {
+        0.5
+    }
 }
 
 /// Compute mean and standard deviation for z-score normalization.
@@ -1698,8 +1739,9 @@ impl StandardizedConfig {
 
     /// DBSF preset: z-score normalization with [-3, 3] clipping.
     ///
-    /// Equivalent to `StandardizedConfig::default()`. DBSF (Distribution-Based Score Fusion)
-    /// is standardized fusion with the conventional 3-sigma clip range.
+    /// Equivalent to `StandardizedConfig::default()`: the 3-sigma clip range that
+    /// DBSF (Distribution-Based Score Fusion) uses. [`dbsf`] additionally shifts
+    /// clipped z-scores into [0, 1] so absent documents score lowest.
     #[must_use]
     pub const fn dbsf() -> Self {
         Self {
@@ -2032,6 +2074,8 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
 pub enum Normalization {
     /// Min-max normalization: `(score - min) / (max - min)` → [0, 1]
     ///
+    /// A constant list (one result, or all scores equal) maps to 0.5.
+    ///
     /// Best when score distributions are similar. Sensitive to outliers.
     #[default]
     MinMax,
@@ -2052,7 +2096,8 @@ pub enum Normalization {
     /// Quantile normalization: maps scores to their percentile rank in [0, 1].
     ///
     /// More robust than min-max for non-Gaussian score distributions.
-    /// Each score becomes `rank_among_scores / (n - 1)`.
+    /// Each score becomes `rank_among_scores / (n - 1)`; tied scores share the
+    /// mean of their ranks.
     /// Referenced as an alternative to 3-sigma DBSF normalization
     /// when cosine similarity scores are not normally distributed.
     Quantile,
@@ -2077,10 +2122,10 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
 
     match method {
         Normalization::MinMax => {
-            let (norm, off) = min_max_params(results);
+            let (norm, off, base) = min_max_params(results);
             results
                 .iter()
-                .map(|(id, s)| (id.clone(), (s - off) * norm))
+                .map(|(id, s)| (id.clone(), (s - off) * norm + base))
                 .collect()
         }
         Normalization::ZScore => {
@@ -2144,8 +2189,22 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
             if n == 1 {
                 quantiles[0] = 0.5; // Single item gets middle quantile
             } else {
-                for (rank, &(orig_idx, _)) in indexed.iter().enumerate() {
-                    quantiles[orig_idx] = rank as f32 / (n - 1) as f32;
+                // Tied scores share the mean of their ranks, so equal scores
+                // get equal percentile ranks.
+                let mut start = 0;
+                while start < n {
+                    let s = indexed[start].1;
+                    let mut end = start + 1;
+                    while end < n
+                        && (indexed[end].1 == s || (s.is_nan() && indexed[end].1.is_nan()))
+                    {
+                        end += 1;
+                    }
+                    let mean_rank = (start + end - 1) as f32 / 2.0;
+                    for &(orig_idx, _) in &indexed[start..end] {
+                        quantiles[orig_idx] = mean_rank / (n - 1) as f32;
+                    }
+                    start = end;
                 }
             }
 
@@ -2163,16 +2222,18 @@ pub fn normalize_scores<I: Clone>(results: &[(I, f32)], method: Normalization) -
     }
 }
 
-/// Returns `(norm_factor, offset)` for min-max normalization.
+/// Returns `(norm_factor, offset, base)` for min-max normalization.
 ///
-/// Normalized score = `(score - offset) * norm_factor`
+/// Normalized score = `(score - offset) * norm_factor + base`
 ///
-/// For single-element lists or lists where all scores are equal,
-/// returns `(0.0, 0.0)` so each element contributes its raw score.
+/// For single-element lists or lists where all scores are equal, returns
+/// `(0.0, min, 0.5)` so each element maps to 0.5, the midpoint (as in
+/// `dbsf_normalize` and single-item quantile normalization): the result stays
+/// in [0, 1] and presence still counts for more than absence (0).
 #[inline(always)]
-fn min_max_params<I>(results: &[(I, f32)]) -> (f32, f32) {
+fn min_max_params<I>(results: &[(I, f32)]) -> (f32, f32, f32) {
     if results.is_empty() {
-        return (1.0, 0.0);
+        return (1.0, 0.0, 0.0);
     }
     let (min, max) = results
         .iter()
@@ -2181,10 +2242,11 @@ fn min_max_params<I>(results: &[(I, f32)]) -> (f32, f32) {
         });
     let range = max - min;
     if range < SCORE_RANGE_EPSILON {
-        // All scores equal: just pass through the score (norm=1, offset=0)
-        (1.0, 0.0)
+        // All scores equal: map every score to the midpoint rather than
+        // passing the raw score through outside [0, 1].
+        (0.0, min, 0.5)
     } else {
-        (1.0 / range, min)
+        (1.0 / range, min, 0.0)
     }
 }
 
@@ -2361,7 +2423,7 @@ where
     I: Clone + Eq + Hash,
     L: AsRef<[(I, f32)]>,
 {
-    if lists.is_empty() || lists.len() != retriever_ids.len() {
+    if lists.is_empty() || lists.len() != retriever_ids.len() || config.k == 0 {
         return Vec::new();
     }
 
@@ -2373,7 +2435,12 @@ where
     let mut provenance: HashMap<I, Vec<SourceContribution>> = HashMap::new();
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
+        // A repeated id within one list counts once, at its first (best) rank.
+        let mut seen: HashSet<&I> = HashSet::with_capacity(list.as_ref().len());
         for (rank, (id, original_score)) in list.as_ref().iter().enumerate() {
+            if !seen.insert(id) {
+                continue;
+            }
             let contribution = 1.0 / (k + (rank + 1) as f32);
 
             // Update score
@@ -2628,9 +2695,9 @@ where
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (rank, (id, original_score)) in items.iter().enumerate() {
-            let normalized_score = (original_score - off) * norm;
+            let normalized_score = (original_score - off) * norm + base;
             let contribution = normalized_score;
 
             *scores.entry(id.clone()).or_insert(0.0) += contribution;
@@ -2673,9 +2740,9 @@ where
 
     for (list, retriever_id) in lists.iter().zip(retriever_ids.iter()) {
         let items = list.as_ref();
-        let (norm, off) = min_max_params(items);
+        let (norm, off, base) = min_max_params(items);
         for (rank, (id, original_score)) in items.iter().enumerate() {
-            let normalized_score = (original_score - off) * norm;
+            let normalized_score = (original_score - off) * norm + base;
             let contribution = normalized_score;
 
             let entry = scores.entry(id.clone()).or_insert((0.0, 0));
@@ -2745,11 +2812,7 @@ where
         let (mean, std) = zscore_params(items);
 
         for (rank, (id, original_score)) in items.iter().enumerate() {
-            let z = if std > SCORE_RANGE_EPSILON {
-                ((original_score - mean) / std).clamp(-3.0, 3.0)
-            } else {
-                0.0
-            };
+            let z = dbsf_normalize(*original_score, mean, std);
             let contribution = z;
 
             *scores.entry(id.clone()).or_insert(0.0) += contribution;
@@ -3546,13 +3609,18 @@ where
     // Track selected documents and remaining candidates
     let mut selected: Vec<(I, f32)> = Vec::with_capacity(k);
     let mut remaining: Vec<(I, f32)> = normalized;
+    // max_sim[i] is max_{s in S} Sim(remaining[i], s), updated with each new
+    // selection, so a round costs one similarity call per candidate instead of
+    // one per (candidate, selected) pair. `f32::max` gives the same value in
+    // any order, so scores match the from-scratch fold bit for bit.
+    let mut max_sim: Vec<f32> = vec![f32::NEG_INFINITY; remaining.len()];
 
     // Greedy selection
     while selected.len() < k && !remaining.is_empty() {
         let mut best_idx = 0;
         let mut best_mmr = f32::NEG_INFINITY;
 
-        for (idx, (cand_id, cand_rel)) in remaining.iter().enumerate() {
+        for (idx, (_, cand_rel)) in remaining.iter().enumerate() {
             // Relevance term: λ · Sim(d, q)
             let relevance_term = lambda * cand_rel;
 
@@ -3560,11 +3628,7 @@ where
             let redundancy_term = if selected.is_empty() {
                 0.0
             } else {
-                let max_sim = selected
-                    .iter()
-                    .map(|(sel_id, _)| similarity(cand_id, sel_id))
-                    .fold(f32::NEG_INFINITY, f32::max);
-                (1.0 - lambda) * max_sim
+                (1.0 - lambda) * max_sim[idx]
             };
 
             // MMR score
@@ -3578,6 +3642,10 @@ where
 
         // Move best candidate to selected set
         let (id, _) = remaining.remove(best_idx);
+        max_sim.remove(best_idx);
+        for ((cand_id, _), sim) in remaining.iter().zip(max_sim.iter_mut()) {
+            *sim = sim.max(similarity(cand_id, &id));
+        }
         selected.push((id, best_mmr));
     }
 
@@ -3694,7 +3762,26 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// Relevance judgments (qrels) for a query.
 ///
 /// Maps document IDs to relevance scores (typically 0=not relevant, 1=relevant, 2=highly relevant).
+/// In metrics over a result list, only the first occurrence of a relevant document
+/// earns credit. Later copies still occupy their original rank positions.
 pub type Qrels<K> = std::collections::HashMap<K, u32>;
+
+// Yield each relevant document's one-based rank and grade on its first appearance.
+fn relevant_hits<'a, K: Eq + Hash>(
+    results: &'a [(K, f32)],
+    qrels: &'a Qrels<K>,
+    k: usize,
+) -> impl Iterator<Item = (usize, u32)> + 'a {
+    let mut seen = HashSet::new();
+    results
+        .iter()
+        .take(k)
+        .enumerate()
+        .filter_map(move |(i, (id, _))| {
+            let grade = *qrels.get(id)?;
+            (grade > 0 && seen.insert(id)).then_some((i + 1, grade))
+        })
+}
 
 /// Normalized Discounted Cumulative Gain at k with linear gain.
 ///
@@ -3727,15 +3814,9 @@ pub fn ndcg_at_k_with_gain<K: Clone + Eq + Hash>(
         return 0.0;
     }
 
-    let retrieved = k.min(results.len());
-    let mut dcg = 0.0;
-
-    for (i, (id, _)) in results.iter().take(retrieved).enumerate() {
-        if let Some(&rel) = qrels.get(id) {
-            let discounted_gain = gain.apply(rel as f64) as f32 / ((i + 2) as f32).log2();
-            dcg += discounted_gain;
-        }
-    }
+    let dcg: f32 = relevant_hits(results, qrels, k)
+        .map(|(rank, grade)| gain.apply(grade as f64) as f32 / ((rank + 1) as f32).log2())
+        .sum();
 
     // Compute IDCG (ideal DCG)
     let mut ideal_relevances: Vec<u32> = qrels.values().copied().collect();
@@ -3779,12 +3860,7 @@ pub fn recall_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>,
         return 0.0;
     }
 
-    let retrieved = k.min(results.len());
-    let relevant_in_top_k = results
-        .iter()
-        .take(retrieved)
-        .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
-        .count();
+    let relevant_in_top_k = relevant_hits(results, qrels, k).count();
 
     relevant_in_top_k as f32 / total_relevant as f32
 }
@@ -3803,12 +3879,7 @@ pub fn precision_at_k<K: Clone + Eq + Hash>(
         return 0.0;
     }
 
-    let retrieved = k.min(results.len());
-    let relevant_in_top_k = results
-        .iter()
-        .take(retrieved)
-        .filter(|(id, _)| qrels.get(id).is_some_and(|&rel| rel > 0))
-        .count();
+    let relevant_in_top_k = relevant_hits(results, qrels, k).count();
 
     relevant_in_top_k as f32 / k as f32
 }
@@ -3823,23 +3894,7 @@ pub fn precision_at_k<K: Clone + Eq + Hash>(
 /// where R is the set of relevant documents and rel(k) is 1 if the document
 /// at rank k is relevant.
 pub fn map<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>) -> f32 {
-    let total_relevant = qrels.values().filter(|&&rel| rel > 0).count();
-    if total_relevant == 0 || results.is_empty() {
-        return 0.0;
-    }
-
-    let mut sum_precision = 0.0;
-    let mut relevant_seen = 0;
-
-    for (i, (id, _)) in results.iter().enumerate() {
-        if qrels.get(id).is_some_and(|&rel| rel > 0) {
-            relevant_seen += 1;
-            // Precision at this rank position
-            sum_precision += relevant_seen as f32 / (i + 1) as f32;
-        }
-    }
-
-    sum_precision / total_relevant as f32
+    map_at_k(results, qrels, results.len())
 }
 
 /// Mean Average Precision at k (MAP@k).
@@ -3854,16 +3909,10 @@ pub fn map_at_k<K: Clone + Eq + Hash>(results: &[(K, f32)], qrels: &Qrels<K>, k:
         return 0.0;
     }
 
-    let k = k.min(results.len());
-    let mut sum_precision = 0.0;
-    let mut relevant_seen = 0;
-
-    for (i, (id, _)) in results.iter().take(k).enumerate() {
-        if qrels.get(id).is_some_and(|&rel| rel > 0) {
-            relevant_seen += 1;
-            sum_precision += relevant_seen as f32 / (i + 1) as f32;
-        }
-    }
+    let sum_precision: f32 = relevant_hits(results, qrels, k)
+        .enumerate()
+        .map(|(i, (rank, _))| (i + 1) as f32 / rank as f32)
+        .sum();
 
     // Unretrieved relevant documents contribute zero, matching TREC map_cut.
     sum_precision / total_relevant as f32
@@ -4494,13 +4543,78 @@ mod tests {
 
     #[test]
     fn duplicate_ids_in_same_list() {
+        // RRF (Cormack, Clarke & Buettcher 2009) sums 1/(k + rank) over the
+        // rankings a document appears in, with one rank per ranking. A repeated
+        // id therefore contributes once, at its first (best) position.
         let a = vec![("d1", 1.0), ("d1", 0.5)];
         let b: Vec<(&str, f32)> = vec![];
         let f = rrf_with_config(&a, &b, RrfConfig::new(60));
 
         assert_eq!(f.len(), 1);
-        let expected = 1.0 / 61.0 + 1.0 / 62.0;
+        let expected = 1.0 / 61.0;
         assert!((f[0].1 - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn duplicate_ids_count_once_per_list_in_every_rrf_variant() {
+        // d1 repeats in `a`; d2 sits at rank 3 in `a` and rank 1 in `b`.
+        let a = vec![("d1", 0.9), ("d1", 0.8), ("d2", 0.7)];
+        let b = vec![("d2", 0.9)];
+        let d1 = 1.0 / 61.0;
+        let d2 = 1.0 / 63.0 + 1.0 / 61.0;
+        let score = |f: &[(&str, f32)], id: &str| f.iter().find(|(d, _)| *d == id).unwrap().1;
+
+        let pair = rrf(&a, &b);
+        assert!((score(&pair, "d1") - d1).abs() < 1e-6);
+        assert!((score(&pair, "d2") - d2).abs() < 1e-6);
+
+        let multi = rrf_multi(&[&a[..], &b[..]], RrfConfig::default());
+        assert!((score(&multi, "d1") - d1).abs() < 1e-6);
+        assert!((score(&multi, "d2") - d2).abs() < 1e-6);
+
+        let weighted = rrf_weighted(&[&a[..], &b[..]], &[1.0, 1.0], RrfConfig::default()).unwrap();
+        assert!((score(&weighted, "d1") - d1 / 2.0).abs() < 1e-6);
+        assert!((score(&weighted, "d2") - d2 / 2.0).abs() < 1e-6);
+
+        let explained = rrf_explain(
+            &[&a[..], &b[..]],
+            &[RetrieverId::new("a"), RetrieverId::new("b")],
+            RrfConfig::default(),
+        );
+        let e1 = explained.iter().find(|r| r.id == "d1").unwrap();
+        assert!((e1.score - d1).abs() < 1e-6);
+        assert_eq!(e1.explanation.sources.len(), 1);
+        assert_eq!(e1.explanation.sources[0].original_rank, Some(0));
+    }
+
+    #[test]
+    fn k_zero_rule_is_consistent_across_rrf_and_isr_entry_points() {
+        // Config constructors reject k = 0 (see `k_zero_panics`). A config
+        // built as a struct literal with k = 0 gives an empty ranking from the
+        // infallible entry points and `InvalidConfig` from the fallible one.
+        let a = vec![("d1", 0.9), ("d2", 0.5)];
+        let b = vec![("d2", 0.8), ("d3", 0.3)];
+        let lists = [&a[..], &b[..]];
+        let zero = RrfConfig { k: 0, top_k: None };
+
+        assert!(rrf_with_config(&a, &b, zero).is_empty());
+        assert!(rrf_multi(&lists, zero).is_empty());
+        assert!(isr_with_config(&a, &b, zero).is_empty());
+        assert!(isr_multi(&lists, zero).is_empty());
+        for method in [FusionMethod::Rrf { k: 0 }, FusionMethod::Isr { k: 0 }] {
+            assert!(method.fuse(&a, &b).is_empty());
+            assert!(method.fuse_multi(&lists).is_empty());
+        }
+        assert!(rrf_explain(
+            &lists,
+            &[RetrieverId::new("a"), RetrieverId::new("b")],
+            zero
+        )
+        .is_empty());
+        assert!(matches!(
+            rrf_weighted(&lists, &[1.0, 1.0], zero),
+            Err(FusionError::InvalidConfig(_))
+        ));
     }
 
     #[test]
@@ -4673,10 +4787,10 @@ mod tests {
         let a = vec![("d1", 1.0), ("d2", 1.0), ("d3", 1.0)];
         let b = vec![("d1", 0.9), ("d2", 0.5), ("d3", 0.1)];
 
-        // Should not panic, list a contributes z-score=0.0 for all
+        // Should not panic, list a contributes the midpoint 0.5 for all
         let f = dbsf(&a, &b);
         assert_eq!(f.len(), 3);
-        // d1 should win (0.0 + positive z-score from b)
+        // d1 should win (0.5 + highest normalized score from b)
         assert_eq!(f[0].0, "d1");
     }
 
@@ -5323,6 +5437,21 @@ mod tests {
     fn make_qrels() -> Qrels<&'static str> {
         // d1=highly relevant, d2=relevant, d3=relevant, d4/d5=not relevant
         HashMap::from([("d1", 2), ("d2", 1), ("d3", 1)])
+    }
+
+    #[test]
+    fn duplicate_results_consume_rank_without_earning_credit() {
+        let qrels = Qrels::from([("a", 2), ("b", 1)]);
+        let results = ranked(&["a", "a", "b"]);
+        assert_eq!(recall_at_k(&results, &qrels, 2), 0.5);
+        assert_eq!(precision_at_k(&results, &qrels, 2), 0.5);
+        assert_eq!(map_at_k(&results, &qrels, 2), 0.5);
+        assert!((map(&results, &qrels) - 5.0 / 6.0).abs() < 1e-6);
+        for gain in [metrics::NdcgGain::Linear, metrics::NdcgGain::Exponential] {
+            let a = gain.apply(2.0) as f32;
+            let expected = (a + 0.5) / (a + 1.0 / 3.0_f32.log2());
+            assert!((ndcg_at_k_with_gain(&results, &qrels, 3, gain) - expected).abs() < 1e-6);
+        }
     }
 
     #[test]

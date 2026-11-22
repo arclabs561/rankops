@@ -12,7 +12,7 @@ Includes ranked-list fusion, reranking, and IR evaluation metrics.
 
 ```toml
 [dependencies]
-rankops = "0.2"
+rankops = "0.5"
 ```
 
 ### Fusion
@@ -30,7 +30,7 @@ let fused = rrf(&bm25, &dense);
 assert_eq!(fused[0].0, "doc_b");
 ```
 
-Score-based fusion when scales are comparable:
+CombMNZ normalizes each list to `[0, 1]`, then rewards documents found in both:
 
 ```rust
 use rankops::combmnz;
@@ -52,7 +52,7 @@ let method = FusionMethod::Rrf { k: 60 };
 let result = method.fuse(&bm25, &dense);
 ```
 
-### Diversity reranking (requires `rerank` feature, on by default)
+### Diversity reranking
 
 MMR selects the next document by balancing relevance against redundancy:
 
@@ -75,11 +75,25 @@ let selected = mmr(&candidates, &similarity, config);
 
 ## Fusion algorithms
 
-15 fusion methods: rank-based (`rrf`, `isr`, `borda`, `condorcet`, `copeland`, `median_rank`) and score-based (`combsum`, `combmnz`, `combmax`, `combmin`, `combmed`, `combanz`, `weighted`, `dbsf`, `standardized`). All two-list functions have `*_multi` variants for 3+ lists. Explainability variants (`rrf_explain`, `combsum_explain`, etc.) return full provenance. Score normalization via `Normalization` enum (MinMax, ZScore, Quantile, Sigmoid, Sum, Rank).
+Fusion methods fall into two groups:
+
+- Rank-based: `rrf`, `isr`, `borda`, `condorcet`, `copeland`, `median_rank`.
+- Score-based: `combsum`, `combmnz`, `combmax`, `combmin`, `combmed`, `combanz`,
+  `weighted`, `dbsf`, `standardized`.
+
+Use `*_multi` variants for three or more lists. Explainability variants such as
+`rrf_explain` return each retriever's contribution. The `Normalization` enum
+selects how scores are scaled; see the [API reference](https://docs.rs/rankops).
 
 ## Evaluation
 
-Single-list IR metrics: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`. `ndcg_at_k` uses linear gain; use `ndcg_at_k_with_gain` and `metrics::NdcgGain::Exponential` when your graded-relevance task calls for `2^rel - 1` instead. These low-level functions accept the ordering supplied by the caller; validate external lists with `validate` before evaluating. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics. `optimize_fusion` is a grid-search helper; choose parameters on held-out queries before reporting final results.
+Metrics for one ranked list: `ndcg_at_k`, `map`, `mrr`, `precision_at_k`, `recall_at_k`, and `hit_rate`.
+
+`ndcg_at_k` uses linear gain; use `ndcg_at_k_with_gain` and `metrics::NdcgGain::Exponential` when your graded-relevance task calls for `2^rel - 1` instead.
+
+These low-level functions accept the ordering supplied by the caller; validate external lists with `validate` before evaluating. Use the `trec` module for parsed TREC runs, multi-query aggregation, and explicit coverage semantics.
+
+`optimize_fusion` searches a grid of parameter values; choose parameters on held-out queries before reporting final results.
 
 The `trec` module validates TREC qrels and run files and reports collection-level mean metrics over every qrels query (`trec_eval -c` semantics). It supports linear-gain nDCG@k, MAP, reciprocal rank, recall@k, and P@k. `evaluate_detailed` and `evaluate_detailed_with_config` also report Judged@k: the share of the top k results that have any qrels judgment, including zero-relevance judgments. It is diagnostic only and never changes metric denominators.
 
@@ -96,9 +110,19 @@ let summary = evaluate_with_config(&run, &qrels, config);
 
 `evaluate(&run, &qrels, k)` remains the short form for the default configuration. Validated `TrecRun` and `TrecQrels` values can also be built from in-memory records. The checked-in parity corpus is part of `cargo test`; with `trec_eval` installed, run `scripts/verify-trec-parity.sh` to compare both the default judged-only and `-c` query-coverage modes.
 
+Compare two TREC runs on one query with the same linear-gain nDCG calculation.
+
+```sh
+cargo run --example trec_ndcg_change -- qrels.txt before.run after.run QUERY_ID 10
+```
+
+The rows list the relevance grade, both ranks, and the signed contribution to
+the query's score change. A dash means the run omitted the document. The same
+breakdown is available in Rust as `trec::explain_ndcg_change`.
+
 ## Diagnostics
 
-The `diagnostics` module (`diagnose`, `overlap_ratio`, `complementarity`, `rank_correlation`) helps decide whether fusion is beneficial, based on Louis et al., "Know When to Fuse" (2024).
+The `diagnostics` module (`diagnose`, `overlap_ratio`, `complementarity`, `rank_correlation`) helps decide whether fusion is beneficial, based on Louis et al., "Know When to Fuse" (COLING 2025).
 
 ## Adapters
 
@@ -125,11 +149,19 @@ let result = Pipeline::new()
 
 Also: `compare()` for method comparison, `fuse_multi_query()` for the N-queries x M-retrievers RAG pattern.
 
-## Reranking (feature: `rerank`)
+## Reranking
 
-ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage reranking, and int8 quantization for token embeddings. On by default; also available: `hierarchical` (ColBERT clustering) and `serde`.
+The `rerank` module provides ColBERT MaxSim scoring, MMR/DPP diversity selection, Matryoshka two-stage reranking, and int8 quantization for token embeddings. It is available in every build: the default `rerank` feature computes vector operations with `innr`, and without it a local fallback is used. Optional features: `hierarchical` (ColBERT token clustering) and `serde`.
 
 ## Examples
+To see why one document moved after fusion, give the example two input runs in six-column TREC format, a query ID and a document ID.
+
+```sh
+cargo run --example trec_rrf_document -- first.run second.run QUERY_ID DOC_ID
+```
+
+It uses equal-weight reciprocal rank fusion with k=60. Pass another positive k as the last argument to match your run. Within each input, scores determine order and equal scores break by descending document ID. Equal fused scores share a range of positions. An absent document contributes zero.
+
 
 See [examples/README.md](examples/README.md) for the example list.
 
@@ -140,6 +172,16 @@ cargo run --example evaluate          # Metrics, diagnostics, pipeline, method c
 cargo run --example trec_eval         # Parse TREC qrels/run files, collection-level metrics
 cargo run --example rerank_maxsim     # ColBERT MaxSim scoring
 cargo run --example diversity         # MMR and DPP diversity reranking
+```
+
+The start of the `fusion` output, fusing a BM25 list and a dense list of four documents each:
+
+```text
+RRF (default k=60):
+  doc_b    0.032522
+  doc_a    0.032266
+  doc_e    0.016129
+  doc_c    0.015873
 ```
 
 ## License

@@ -1,6 +1,6 @@
 [package]
 name = "rankops"
-version = "0.2.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -30,6 +30,10 @@ innr = { version = "0.6", optional = true }
 kodama = { version = "0.3", optional = true }
 # Pareto frontier for multi-objective reranking (optional)
 pare = { version = "0.2.0", optional = true }
+# Only for the `composed_retrieval` example: a BM25 index and an ANN index to
+# produce the ranked lists that rankops fuses.
+lexir = { version = "0.5", optional = true, default-features = false }
+vicinity = { version = "0.12", optional = true }
 
 [features]
 default = ["rerank"]
@@ -42,6 +46,8 @@ innr = ["rerank"]
 hierarchical = ["dep:kodama"]
 # Pareto frontier for multi-objective result selection
 pareto = ["dep:pare"]
+# Builds the `composed_retrieval` example (pulls in lexir and vicinity).
+composed-example = ["dep:lexir", "dep:vicinity"]
 
 [dev-dependencies]
 proptest = "1.9"
@@ -50,3 +56,19 @@ proptest = "1.9"
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "composed_retrieval"
+required-features = ["composed-example"]
+
+[[example]]
+name = "scifact"
+required-features = ["composed-example"]
+
+[[example]]
+name = "pareto_rerank"
+required-features = ["pareto"]
+
+[[example]]
+name = "trec_rrf_document"
+test = true
