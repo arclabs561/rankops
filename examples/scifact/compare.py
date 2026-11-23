@@ -18,7 +18,24 @@ def compare(data, runs, trec_eval):
                 value = float(row[key])
                 if not 0 <= value <= 1:
                     raise ValueError(f"{row['method']}, {row['qid']}, {key}: invalid score {value}")
-            metrics[row["qid"]][row["method"]] = row
+            method = row["method"]
+            scores = metrics[row["qid"]]
+            if method in scores:
+                raise ValueError(f"duplicate metric row: {row['qid']}, {method}")
+            scores[method] = row
+
+    relevant = defaultdict(set)
+    for row in (data / "qrels.trec").read_text().splitlines():
+        q, _, doc, grade = row.split()
+        docs = relevant[q]
+        if int(grade) > 0:
+            docs.add(doc)
+    if metrics.keys() != relevant.keys() or not metrics:
+        raise ValueError("per-query metric query IDs must match the nonempty qrels query set")
+    for qid, scores in metrics.items():
+        if scores.keys() != set(METHODS):
+            raise ValueError(f"{qid}: expected exactly one metric row per method")
+
     gain = {q: float(v["rrf"]["ndcg10"]) - float(v["bm25"]["ndcg10"]) for q, v in metrics.items()}
     for measure in ("ndcg10", "recall100"):
         diffs = [float(v["rrf"][measure]) - float(v["bm25"][measure]) for v in metrics.values()]
@@ -33,11 +50,6 @@ def compare(data, runs, trec_eval):
     oracle = mean(max(float(v[m]["ndcg10"]) for m in ("bm25", "trigram")) for v in metrics.values())
     print(f"Choosing the better source with qrels per query would give {oracle:.4f} nDCG@10.")
 
-    relevant = defaultdict(set)
-    for row in (data / "qrels.trec").read_text().splitlines():
-        q, _, doc, grade = row.split()
-        if int(grade) > 0:
-            relevant[q].add(doc)
     ranks = {m: defaultdict(dict) for m in METHODS}
     for method in METHODS:
         for row in (runs / f"{method}.run").read_text().splitlines():
@@ -47,7 +59,7 @@ def compare(data, runs, trec_eval):
     missing = {q: docs - ranks["bm25"][q].keys() - ranks["trigram"][q].keys()
                for q, docs in relevant.items()}
     print(f"Candidate union missed {sum(map(len, missing.values()))} known relevant query–document pairs;",
-          f"{sum(missing[q] == docs for q, docs in relevant.items())} queries had no known relevant candidate.")
+          f"{sum(bool(docs) and missing[q] == docs for q, docs in relevant.items())} queries had no known relevant candidate.")
     # Break tied extremes by the lowest native query ID in these collections.
     for q in (min(gain, key=lambda q: (gain[q], len(q), q)),
               min(gain, key=lambda q: (-gain[q], len(q), q))):
